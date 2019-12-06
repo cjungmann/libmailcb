@@ -42,86 +42,20 @@ void test_hello(MParcel *mparcel)
       printf("Failed to get an open, connected socket.\n");
 }
 
+void test_advise(void)
+{
+   MParcel p;
+   memset(&p, 0, sizeof(p));
+   p.verbose = 1;
+
+   advise_message(&p, "This ", "is ",  "a ", "broken-up ", "string ", NULL);
+}
+
+
 int main(int argc, const char** argv)
 {
-   MParcel mparcel;
-   memset(&mparcel, 0, sizeof(mparcel));
-   mparcel.host_port = 25;
-
-   // process command line arguments:
-   const char **cur_arg = argv;
-   const char **end_arg = cur_arg + argc;
-   const char *str;
-
-   while (cur_arg < end_arg)
-   {
-      str = *cur_arg;
-      if (*str == '-')
-      {
-         while (*++str)
-         {
-            switch(*str)
-            {
-               case 'h':  // host
-                  if (cur_arg + 1 < end_arg)
-                  {
-                     mparcel.host_url = *++cur_arg;
-                     goto continue_next_arg;
-                  }
-                  break;
-               case 'p':  // port
-                  if (cur_arg + 1 < end_arg)
-                  {
-                     mparcel.host_port = atoi(*++cur_arg);
-                     goto continue_next_arg;
-                  }
-                  break;
-               case 'u':  // user
-                  if (cur_arg + 1 < end_arg)
-                  {
-                     mparcel.user = *++cur_arg;
-                     goto continue_next_arg;
-                  }
-                  break;
-               case 'l':  // login
-                  if (cur_arg + 1 < end_arg)
-                  {
-                     mparcel.login = *++cur_arg;
-                     goto continue_next_arg;
-                  }
-                  break;
-               case 'w':  // passWord
-                  if (cur_arg + 1 < end_arg)
-                  {
-                     mparcel.password = *++cur_arg;
-                     goto continue_next_arg;
-                  }
-
-               case 't':   // tls
-                  mparcel.starttls = 1;
-                  break;
-
-               case 'v':  // verbose messages
-               case 'q':  // suppress error messages
-               default:
-                  break;
-            }
-         }
-      }
-
-     continue_next_arg:
-      ++cur_arg;
-   }
-
-   
-   // Request password if not provided:
-
-
-
-      /* test_connection(); */
-      test_hello(&mparcel);
-      
-
+   test_connection();
+   test_advise();
    return 0;
 }
 

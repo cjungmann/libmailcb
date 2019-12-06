@@ -7,11 +7,51 @@
 #include <string.h>      // for memset()
 #include <assert.h>
 #include <unistd.h>      // for close();
+#include <stdarg.h>      // for va_args in advise() and log()
 
 #include "socktalk.h"
 #include "mailcb.h"
 
 #include "commparcel.c"
+
+void advise_message(const MParcel *mp, ...)
+{
+   va_list ap;
+   const char *str;
+
+   if (mp->verbose)
+   {
+      FILE *msgfile = stdout;
+
+      va_start(ap, mp);
+
+      while((str = va_arg(ap, char*)))
+         fputs(str, msgfile);
+
+      fputc('\n', msgfile);
+
+      va_end(ap);
+   }
+}
+
+void log_message(const MParcel *mp, ...)
+{
+   va_list ap;
+   const char *str;
+
+   if (!mp->quiet)
+   {
+      FILE *msgfile = mp->logfile ? mp->logfile : stdout;
+      va_start(ap, mp);
+
+      while((str = va_arg(ap, char*)))
+         fputs(str, msgfile);
+
+      fputc('\n', msgfile);
+
+      va_end(ap);
+   }
+}
 
 int digits_in_base(int value, int base)
 {

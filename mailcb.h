@@ -31,6 +31,14 @@ typedef struct _comm_parcel
    const char *password;
    const char *user;
 
+   const char *account;   // Only used if a config file had been opened.
+
+   /** Reporting fields */
+   
+   int verbose;
+   int quiet;
+   const char *logfilepath;
+   FILE *logfile;
 
    /** Server communication conduit */
    STalker *stalker;
@@ -53,6 +61,9 @@ typedef struct _comm_parcel
    int cap_auth_oauth10a;
    int cap_auth_oauthbearer;
 } MParcel;
+
+void advise_message(const MParcel *mp, ...);
+void log_message(const MParcel *mp, ...);
 
 int digits_in_base(int value, int base);
 int itoa_buff(int value, int base, char *buffer, int buffer_len);

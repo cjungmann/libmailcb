@@ -1,6 +1,3 @@
-// -*- compile-command: "cc -Wall -Werror -I . -L. -ggdb -o mcbtest mcbtest.c  -Wl,-R -Wl,. -lmailcb" -*-
-// -*- 
-
 #include <stdio.h>
 #include <alloca.h>
 #include <unistd.h>    // for close() function

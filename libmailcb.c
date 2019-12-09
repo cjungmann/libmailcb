@@ -14,6 +14,10 @@
 
 #include "commparcel.c"
 
+/**
+ * @brief Writes arguments (const char*s following MParcel*, terminated by NULL)
+ *        only if MParcel::verbose is true.
+ */
 void advise_message(const MParcel *mp, ...)
 {
    va_list ap;
@@ -34,6 +38,10 @@ void advise_message(const MParcel *mp, ...)
    }
 }
 
+/**
+ * @brief Writes arguments (const char*s following MParcel*, terminated by NULL)
+ *        only if MParcel::quiet is NOT true.
+ */
 void log_message(const MParcel *mp, ...)
 {
    va_list ap;
@@ -141,6 +149,8 @@ void parse_greeting_response(MParcel *parcel, const char *buffer, int buffer_len
    const char *ptr = buffer;
    const char *end = buffer + buffer_len;
 
+   clear_smtp_caps(parcel);
+
    while (ptr < end)
    {
       advance_chars = walk_status_reply(ptr, &status, &line, &line_len);
@@ -220,6 +230,8 @@ int greet_server(MParcel *parcel, int socket_handle)
    int bytes_sent, total_sent = 0;
    char buffer[1024];
 
+   const char *host = parcel->host_url;
+
    STalker stalker;
    STalker *pstk = &stalker;
    init_sock_talker(pstk, socket_handle);
@@ -227,15 +239,28 @@ int greet_server(MParcel *parcel, int socket_handle)
    // Read response from socket connection?  I don't know why,
    // but we need to read the response before getting anything.
    total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
-   printf("read %d bytes (%.*s)\n", bytes_read, bytes_read, buffer);
 
-   total_sent += bytes_sent = stk_send_line(pstk, "EHLO ", parcel->host_url, NULL);
+   advise_message(parcel, "About to greet server.", NULL);
+
+   total_sent += bytes_sent = stk_send_line(pstk, "EHLO ", host, NULL);
    total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
    parse_greeting_response(parcel, buffer, sizeof(buffer));
 
-   
-   printf("read %d bytes (%.*s)\n", bytes_read, bytes_read, buffer);
+   // If the profile asks for STARTTLS AND the server offers STARTTLS, do it.
+   if (parcel->starttls != 0 && get_starttls(parcel))
+   {
+      total_sent += bytes_sent = stk_send_line(pstk, "STARTTLS", NULL);
+      total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
 
+      printf("STARTTLS response is:\n[44;1m%.*s[m\n", bytes_read, buffer);
+      // start tls mode, then re-greet and get new capabilities.
+      // Only if STARTTLS and AUTH are not both included (a la gmail).
+   }
+   else
+   {
+      printf("Expected STARTTLS in :\n[44;1m%.*s[m\n", bytes_read, buffer);
+      advise_message(parcel, "Proceeding without STARTTLS.", NULL);
+   }
 
    return 0;
 }

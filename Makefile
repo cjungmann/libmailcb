@@ -19,7 +19,7 @@ clean :
 	rm -f libmailcb.so libmailcbd.so socktalk.o socktalkd.o mcbtest
 
 mailer : mailer.c libmailcb.so mailcb.h
-	$(CC) $(BASEFLAGS) -L. -o mailer mailer.c $(LOCAL_LINK)d -lreadini
+	$(CC) $(BASEFLAGS) -L. -o mailer mailer.c $(LOCAL_LINK) -lreadini
 
 debug: libmailcb.c mailcb.h mcbtest.c socktalk.o socktalk.h commparcel.c mailer.c
 	$(CC) $(LIB_CFLAGS) -c -o socktalkd.o socktalk.c

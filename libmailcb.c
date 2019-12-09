@@ -95,22 +95,8 @@ int itoa_buff(int value, int base, char *buffer, int buffer_len)
       return 0;
 }
 
-typedef void (*Set_Cap_Func)(MParcel *mp, const char *line);
-
-void parse_auth_options(MParcel *parcel, const char *line, int line_len)
-{
-}
-
-typedef struct _cap_string
-{
-   const char   *str;
-   int          len;
-   Set_Cap_Func set_cap;
-
-} CapString;
-
 CapString capstrings[] = {
-   {"AUTH",                 4, set_auth},
+   /* {"AUTH",                 4, set_auth}, */
    {"SIZE",                 4, set_size},
    {"STARTTLS",             8, set_starttls},
    {"ENHANCEDSTATUSCODES", 19, set_enhancedstatuscodes},
@@ -124,14 +110,13 @@ CapString capstrings[] = {
 int capstrings_count = sizeof(capstrings) / sizeof(CapString);
 const CapString *capstring_end = &capstrings[sizeof(capstrings) / sizeof(CapString)];
 
-
 void parse_capability_response(MParcel *parcel, const char *line, int line_len)
 {
    const CapString *ptr = capstrings;
    while (ptr < capstring_end)
    {
       if (0 == strncmp(line, ptr->str, ptr->len))
-         (*ptr->set_cap)(parcel, line);
+         (*ptr->set_cap)(parcel, line, ptr->len);
 
       ++ptr;
    }
@@ -157,13 +142,18 @@ void parse_greeting_response(MParcel *parcel, const char *buffer, int buffer_len
       switch(advance_chars)
       {
          case -1:
-            fprintf(stderr, "Error processing replys from \"%s\"\n", buffer);
+            fprintf(parcel->logfile, "Error processing replys from \"%s\"\n", buffer);
          case 0:
             ptr = end;  // set ptr to break loop
             break;
          default:
             if (status == 250)
-               parse_capability_response(parcel, line, line_len);
+            {
+               if (0 == strncmp(line, "AUTH", 4))
+                  set_auth(parcel, line, line_len);
+               else
+                  parse_capability_response(parcel, line, line_len);
+            }
 
             ptr += advance_chars;
             break;
@@ -226,8 +216,8 @@ int get_connected_socket(const char *host_url, int port)
 
 int greet_server(MParcel *parcel, int socket_handle)
 {
-   int bytes_read, total_read = 0;
-   int bytes_sent, total_sent = 0;
+   int reply_status;
+   int bytes_read, bytes_sent;
    char buffer[1024];
 
    const char *host = parcel->host_url;
@@ -236,32 +226,146 @@ int greet_server(MParcel *parcel, int socket_handle)
    STalker *pstk = &stalker;
    init_sock_talker(pstk, socket_handle);
 
-   // Read response from socket connection?  I don't know why,
+   // mparcel needs to know how to talk to the server:
+   parcel->stalker = &stalker;
+
+   // read response from socket connection?  i don't know why,
    // but we need to read the response before getting anything.
-   total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
+   parcel->total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
 
-   advise_message(parcel, "About to greet server.", NULL);
+   advise_message(parcel, "about to greet server.", NULL);
 
-   total_sent += bytes_sent = stk_send_line(pstk, "EHLO ", host, NULL);
-   total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
+   parcel->total_sent += bytes_sent = stk_send_line(pstk, "EHLO ", host, NULL);
+   parcel->total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
    parse_greeting_response(parcel, buffer, sizeof(buffer));
 
-   // If the profile asks for STARTTLS AND the server offers STARTTLS, do it.
+   // if the profile asks for starttls and the server offers starttls, do it.
    if (parcel->starttls != 0 && get_starttls(parcel))
    {
-      total_sent += bytes_sent = stk_send_line(pstk, "STARTTLS", NULL);
-      total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
+      parcel->total_sent += bytes_sent = stk_send_line(pstk, "STARTTLS", NULL);
+      parcel->total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
+      reply_status = atoi(buffer);
 
-      printf("STARTTLS response is:\n[44;1m%.*s[m\n", bytes_read, buffer);
-      // start tls mode, then re-greet and get new capabilities.
-      // Only if STARTTLS and AUTH are not both included (a la gmail).
+      if (reply_status >= 200 && reply_status < 300)
+         start_ssl(parcel, socket_handle);
+      else
+         // Send execution back to the caller:
+         start_callback(parcel);
    }
    else
    {
-      printf("Expected STARTTLS in :\n[44;1m%.*s[m\n", bytes_read, buffer);
-      advise_message(parcel, "Proceeding without STARTTLS.", NULL);
+      printf("expected starttls in :\n[44;1m%.*s[m\n", bytes_read, buffer);
+      advise_message(parcel, "proceeding without starttls.", NULL);
    }
 
    return 0;
+}
+
+void start_ssl(MParcel *parcel, int socket_handle)
+{
+   int bytes_sent, bytes_read;
+   STalker *pstk = parcel->stalker;
+   const char *host = parcel->host_url;
+
+   char buffer[1024];
+
+   const SSL_METHOD *method;
+   SSL_CTX *context;
+   SSL *ssl;
+   int connect_outcome;
+
+   OpenSSL_add_all_algorithms();
+   /* err_load_bio_strings(); */
+   ERR_load_crypto_strings();
+   SSL_load_error_strings();
+
+   /* openssl_config(null); */
+
+   SSL_library_init();
+
+   method = SSLv23_client_method();
+   if (method)
+   {
+      context = SSL_CTX_new(method);
+
+      if (context)
+      {
+         // following two not included in most recent example code i found.
+         // it may be appropriate to uncomment these lines as i learn more.
+         /* ssl_ctx_set_verify(context, ssl_verify_peer, null); */
+         /* ssl_ctx_set_verify_depth(context, 4); */
+
+         // we could set some flags, but i'm not doing it until i need to and i understand 'em
+         /* const long ctx_flags = ssl_op_no_sslv2 | ssl_op_no_sslv3 | ssl_op_no_compression; */
+         /* ssl_ctx_set_options(context, ctx_flags); */
+         SSL_CTX_set_options(context, SSL_OP_NO_SSLv2);
+
+         ssl = SSL_new(context);
+         if (ssl)
+         {
+            SSL_set_fd(ssl, socket_handle);
+
+            connect_outcome = SSL_connect(ssl);
+
+            if (connect_outcome == 1)
+            {
+               STalker talker, *old_talker = parcel->stalker;
+               init_ssl_talker(&talker, ssl);
+
+               parcel->stalker = pstk = &talker;
+
+               advise_message(parcel, "About to resend EHLO to get authorization information.", NULL);
+               parcel->total_sent += bytes_sent = stk_send_line(pstk, "EHLO ", host, NULL);
+               parcel->total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
+               parse_greeting_response(parcel, buffer, sizeof(buffer));
+
+               advise_message(parcel, "ssl protocol initialized.", NULL);
+
+               // Send execution back to the caller:
+               start_callback(parcel);
+
+               // Restore previous STalker for when the SSL session is abandoned.
+               // I would have put it after SSL_free(), but that reverses the SSL_new()
+               // allocation rather than the connection.  This may be the wrong
+               // thing, but it seems right now.
+               parcel->stalker = old_talker;
+            }
+            else if (connect_outcome == 0)
+               // failed with controlled shutdown
+               log_message(parcel, "ssl connection failed and was cleaned up.", NULL);
+            else
+            {
+               log_message(parcel, "ssl connection failed and aborted.", NULL);
+               /* present_ssl_error(ssl_get_error(ssl, connect_outcome)); */
+               ERR_print_errors_fp(parcel->logfile);
+            }
+
+            SSL_free(ssl);
+         }
+         else  // failed to get an ssl
+         {
+            log_message(parcel, "failed to get an ssl object.", NULL);
+            ERR_print_errors_fp(parcel->logfile);
+         }
+
+         SSL_CTX_free(context);
+      }
+      else // failed to get a context
+      {
+         log_message(parcel, "Failed to get an SSL context.", NULL);
+         ERR_print_errors_fp(parcel->logfile);
+      }
+   }
+   else
+      log_message(parcel, "Failed to get an SSL method.", NULL);
+   
+}
+
+void start_callback(MParcel *parcel)
+{
+   if (parcel->callback_func)
+      (*parcel->callback_func)(parcel);
+   else
+      log_message(parcel, "No callback function provided to continue emailing.", NULL);
 }
 

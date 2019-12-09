@@ -11,6 +11,11 @@
 
 #include "socktalk.h"
 
+// prototype for MParcel to be used for function pointer
+struct _comm_parcel;
+
+typedef void (*MailCB)(struct _comm_parcel *parcel);
+
 typedef struct _smtp_args
 {
    const char *host;
@@ -40,6 +45,8 @@ typedef struct _smtp_caps
    int cap_auth_cram_md5;
    int cap_auth_oauth10a;
    int cap_auth_oauthbearer;
+   int cap_auth_xoauth;
+   int cap_auth_xoauth2;
 } SmtpCaps;
 
 typedef struct _comm_parcel
@@ -48,6 +55,9 @@ typedef struct _comm_parcel
    const char *host_url;
    int host_port;
    int starttls;
+
+   int total_sent;
+   int total_read;
 
    const char *login;
    const char *password;
@@ -64,10 +74,12 @@ typedef struct _comm_parcel
    /** Server communication conduit */
    STalker *stalker;
 
+   /** Enclosed struct to make it easier to clear for multiple settings. */
    SmtpCaps caps;
 
-} MParcel;
+   MailCB  *callback_func;
 
+} MParcel;
 
 #include "commparcel.h"
 
@@ -82,6 +94,9 @@ void parse_greeting_response(MParcel *parcel, const char *buffer, int buffer_len
 int get_connected_socket(const char *host_url, int port);
 
 int greet_server(MParcel *parcel, int socket_handle);
+void start_ssl(MParcel *parcel, int socket_handle);
+
+void start_callback(MParcel *parcel);
 
 
 

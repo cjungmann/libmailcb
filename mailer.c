@@ -28,47 +28,57 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
    {
       const char *acct = parcel->account;
       if (!acct)
-      {
          acct = ri_find_section_value(root, "defaults", "default-account");
-         if (acct)
+
+      if (acct)
+      {
+         section = ri_get_section(root, acct);
+         if (section)
          {
-            section = ri_get_section(root, acct);
-            if (section)
+            line = section->lines;
+            while (line)
             {
-               line = section->lines;
-               while (line)
+               if (update_if_needed("host", line, &parcel->host_url, parcel))
+                  goto next_line;
+
+               if (update_if_needed("from", line, &parcel->login, parcel))
+                  goto next_line;
+
+               if (update_if_needed("user", line, &parcel->user, parcel))
+                  goto next_line;
+
+               if (update_if_needed("password", line, &parcel->password, parcel))
+                  goto next_line;
+
+               if (0 == parcel->host_port && 0 == strcmp(line->tag, "port"))
                {
-                  if (update_if_needed("host", line, &parcel->host_url, parcel))
-                     goto next_line;
-
-                  if (update_if_needed("from", line, &parcel->login, parcel))
-                     goto next_line;
-
-                  if (update_if_needed("user", line, &parcel->user, parcel))
-                     goto next_line;
-
-                  if (update_if_needed("password", line, &parcel->password, parcel))
-                     goto next_line;
-
-                  if (0 == parcel->host_port && 0 == strcmp(line->tag, "port"))
-                  {
-                     parcel->host_port = atoi(line->value);
-                     goto next_line;
-                  }
-
-                  else if (0 == parcel->starttls && 0 == strcmp(line->tag, "starttls"))
-                  {
-                     parcel->starttls = 1;
-                     goto next_line;
-                  }
-
-                 next_line:
-                  line = line->next;
+                  parcel->host_port = atoi(line->value);
+                  goto next_line;
                }
+
+               else if (0 == parcel->starttls
+                        && 0 == strcmp(line->tag, "use_tls")
+                        && 0 == strcmp(line->value, "on"))
+               {
+                  parcel->starttls = 1;
+                  goto next_line;
+               }
+
+              next_line:
+               line = line->next;
             }
          }
       }
    }
+
+   int osocket = get_connected_socket(parcel->host_url, parcel->host_port);
+   if (osocket)
+   {
+      advise_message(parcel, "Socket opened, about to begin conversation.", NULL);
+      greet_server(parcel, osocket);
+      close(osocket);
+   }
+
 
    /* test_connection(); */
    /* test_hello(parcel); */
@@ -79,14 +89,13 @@ int main(int argc, const char** argv)
 {
    MParcel mparcel;
    memset(&mparcel, 0, sizeof(mparcel));
-   mparcel.host_port = 25;
 
    // process command line arguments:
    const char **cur_arg = argv;
    const char **end_arg = cur_arg + argc;
    const char *str;
 
-   const char *config_file_path = NULL;
+   const char *config_file_path = "./mailer.conf";
 
    while (cur_arg < end_arg)
    {
@@ -170,20 +179,15 @@ int main(int argc, const char** argv)
    if (config_file_path
        && 0 == (access_result = access(config_file_path, F_OK|R_OK)))
    {
-      if (mparcel.verbose)
-         printf("About to open config file \"%s\".\n", config_file_path);
-
+      advise_message(&mparcel, "About to open config file \"", config_file_path, "\"", NULL);
       ri_read_file(config_file_path,
                    begin_after_read_config_attempt,
                    (void*)&mparcel);
    }
    else
    {
-      if (!mparcel.quiet)
-         fprintf(stderr, "Failed to find a configuration file. Continuing without configuration.\n");
-
+      advise_message(&mparcel, "Failed to find configuration file.", NULL);
       begin_after_read_config_attempt(NULL, (void*)&mparcel);
-
    }
 
    return 0;

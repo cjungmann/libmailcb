@@ -6,6 +6,9 @@ int walk_status_reply(const char *str, int *status, const char** line, int *line
 {
    int i_status = 0;
 
+   if (! *str)
+      return 0;
+
    // Initialize outputs, which will also be used as progress flags.
    *status = 0;
    *line = NULL;

@@ -20,6 +20,28 @@ typedef struct _smtp_args
    int use_tls;
 } SmtpArgs;
 
+typedef struct _smtp_caps
+{
+   /** Server-reported capabilities */
+   int cap_starttls;
+   int cap_enhancedstatuscodes;
+   int cap_8bitmime;
+   int cap_7bitmime;
+   int cap_pipelining;
+   int cap_chunking;
+   int cap_smtputf8;
+   int cap_size;
+   int cap_auth_any;
+   int cap_auth_plain;        // use base64 encoding
+   int cap_auth_login;        // use base64 encoding
+   int cap_auth_gssapi;
+   int cap_auth_digest_md5;
+   int cap_auth_md5;
+   int cap_auth_cram_md5;
+   int cap_auth_oauth10a;
+   int cap_auth_oauthbearer;
+} SmtpCaps;
+
 typedef struct _comm_parcel
 {
    /** requested options */
@@ -34,7 +56,6 @@ typedef struct _comm_parcel
    const char *account;   // Only used if a config file had been opened.
 
    /** Reporting fields */
-   
    int verbose;
    int quiet;
    const char *logfilepath;
@@ -43,24 +64,12 @@ typedef struct _comm_parcel
    /** Server communication conduit */
    STalker *stalker;
 
-   /** Server-reported capabilities */
-   int cap_starttls;
-   int cap_enhancedstatuscodes;
-   int cap_8bitmime;
-   int cap_7bitmime;
-   int cap_pipelining;
-   int cap_chunking;
-   int cap_smtputf8;
-   int cap_size;
-   int cap_auth_plain;        // use base64 encoding
-   int cap_auth_login;        // use base64 encoding
-   int cap_auth_gssapi;
-   int cap_auth_digest_md5;
-   int cap_auth_md5;
-   int cap_auth_cram_md5;
-   int cap_auth_oauth10a;
-   int cap_auth_oauthbearer;
+   SmtpCaps caps;
+
 } MParcel;
+
+
+#include "commparcel.h"
 
 void advise_message(const MParcel *mp, ...);
 void log_message(const MParcel *mp, ...);
@@ -73,6 +82,7 @@ void parse_greeting_response(MParcel *parcel, const char *buffer, int buffer_len
 int get_connected_socket(const char *host_url, int port);
 
 int greet_server(MParcel *parcel, int socket_handle);
+
 
 
 

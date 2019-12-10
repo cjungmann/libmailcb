@@ -363,9 +363,16 @@ void start_ssl(MParcel *parcel, int socket_handle)
 
 void start_callback(MParcel *parcel)
 {
+   char buffer[512];
+
    if (parcel->callback_func)
       (*parcel->callback_func)(parcel);
    else
       log_message(parcel, "No callback function provided to continue emailing.", NULL);
+
+   // Politely terminate connection with server
+   parcel->total_sent = stk_send_line(parcel->stalker, "QUIT", NULL);
+   parcel->total_read = stk_recv_line(parcel->stalker, buffer, sizeof(buffer));
+   
 }
 

@@ -14,7 +14,7 @@
 // prototype for MParcel to be used for function pointer
 struct _comm_parcel;
 
-typedef void (*MailCB)(struct _comm_parcel *parcel);
+typedef void (*ServerReady)(struct _comm_parcel *parcel);
 
 typedef struct _smtp_args
 {
@@ -51,18 +51,21 @@ typedef struct _smtp_caps
 
 typedef struct _comm_parcel
 {
-   /** requested options */
+   /** Details for making the SMTP connection. */
    const char *host_url;
    int host_port;
    int starttls;
 
+   /** Tracking variables */
    int total_sent;
    int total_read;
 
+   /** SMTP server login credentials */
    const char *login;
    const char *password;
    const char *user;
 
+   /** Points to a config file section from which connection information can be read. */
    const char *account;   // Only used if a config file had been opened.
 
    /** Reporting fields */
@@ -77,14 +80,21 @@ typedef struct _comm_parcel
    /** Enclosed struct to make it easier to clear for multiple settings. */
    SmtpCaps caps;
 
-   MailCB  *callback_func;
+   /** User-discretion pointer */
+   void *data;
+
+   ServerReady callback_func;
 
 } MParcel;
+
 
 #include "commparcel.h"
 
 void advise_message(const MParcel *mp, ...);
 void log_message(const MParcel *mp, ...);
+
+int send_data(MParcel *mp, ...);
+int recv_data(MParcel *mp, char *buffer, int len);
 
 int digits_in_base(int value, int base);
 int itoa_buff(int value, int base, char *buffer, int buffer_len);
@@ -92,11 +102,17 @@ int itoa_buff(int value, int base, char *buffer, int buffer_len);
 void parse_greeting_response(MParcel *parcel, const char *buffer, int buffer_len);
 
 int get_connected_socket(const char *host_url, int port);
+int authorize_session(MParcel *parcel);
 
 int greet_server(MParcel *parcel, int socket_handle);
 void start_ssl(MParcel *parcel, int socket_handle);
 
-void start_callback(MParcel *parcel);
+void notify_mailer(MParcel *parcel);
+
+void send_email(MParcel *parcel,
+                const char **recipients,
+                const char **headers,
+                const char *msg);
 
 
 

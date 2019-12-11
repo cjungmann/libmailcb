@@ -17,6 +17,18 @@ int update_if_needed(const char *name, const ri_Line *line, const char **target,
    return 0;
 }
 
+void server_notice(MParcel *parcel)
+{
+   printf("Got notice from MailCB.\n");
+
+   send_email(parcel,
+              (const char*[]){"chuck@cpjj.net", NULL},
+              (const char*[]){"Subject: SMTP Server Debugging", NULL},
+              "The message is required in order to make a complete email\n"
+              "package.  Please don't misinterpret my intentions.  I only\n"
+              "want to test a bulk email sender.");
+}
+
 void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
 {
    MParcel *parcel = (MParcel*)mparcel;
@@ -32,6 +44,8 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
 
       if (acct)
       {
+         advise_message(parcel, "Using configuration account \"", acct, "\"", NULL);
+
          section = ri_get_section(root, acct);
          if (section)
          {
@@ -68,6 +82,8 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
                line = line->next;
             }
          }
+         else
+            log_message(parcel, "Failed to find configuration account \"", acct, "\"", NULL);
       }
    }
 
@@ -78,17 +94,13 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
       greet_server(parcel, osocket);
       close(osocket);
    }
-
-
-   /* test_connection(); */
-   /* test_hello(parcel); */
-
 }
 
 int main(int argc, const char** argv)
 {
    MParcel mparcel;
    memset(&mparcel, 0, sizeof(mparcel));
+   mparcel.callback_func = server_notice;
 
    // process command line arguments:
    const char **cur_arg = argv;

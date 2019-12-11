@@ -61,6 +61,26 @@ void log_message(const MParcel *mp, ...)
    }
 }
 
+int send_data(MParcel *mp, ...)
+{
+   int bytes_sent = 0;
+   va_list ap;
+   va_start(ap, mp);
+   
+   mp->total_sent += bytes_sent = stk_vsend_line(mp->stalker, ap);
+
+   va_end(ap);
+
+   return bytes_sent;
+}
+
+int recv_data(MParcel *mp, char *buffer, int len)
+{
+   int bytes_read;
+   mp->total_read += bytes_read =stk_recv_line(mp->stalker, buffer, len);
+   return bytes_read;
+}
+
 int digits_in_base(int value, int base)
 {
    int count = 0;
@@ -217,7 +237,7 @@ int get_connected_socket(const char *host_url, int port)
 int greet_server(MParcel *parcel, int socket_handle)
 {
    int reply_status;
-   int bytes_read, bytes_sent;
+   int bytes_read;
    char buffer[1024];
 
    const char *host = parcel->host_url;
@@ -231,26 +251,28 @@ int greet_server(MParcel *parcel, int socket_handle)
 
    // read response from socket connection?  i don't know why,
    // but we need to read the response before getting anything.
-   parcel->total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
+   bytes_read = recv_data(parcel, buffer, sizeof(buffer));
 
    advise_message(parcel, "about to greet server.", NULL);
 
-   parcel->total_sent += bytes_sent = stk_send_line(pstk, "EHLO ", host, NULL);
-   parcel->total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
-   parse_greeting_response(parcel, buffer, sizeof(buffer));
+   send_data(parcel, "EHLO ", host, NULL);
+   bytes_read = recv_data(parcel, buffer, sizeof(buffer));
+   parse_greeting_response(parcel, buffer, bytes_read);
 
    // if the profile asks for starttls and the server offers starttls, do it.
    if (parcel->starttls != 0 && get_starttls(parcel))
    {
-      parcel->total_sent += bytes_sent = stk_send_line(pstk, "STARTTLS", NULL);
-      parcel->total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
+      send_data(parcel, "STARTTLS", NULL);
+      bytes_read = recv_data(parcel, buffer, sizeof(buffer));
       reply_status = atoi(buffer);
 
       if (reply_status >= 200 && reply_status < 300)
          start_ssl(parcel, socket_handle);
-      else
+      else if (authorize_session(parcel))
+      {
          // Send execution back to the caller:
-         start_callback(parcel);
+         notify_mailer(parcel);
+      }
    }
    else
    {
@@ -263,7 +285,7 @@ int greet_server(MParcel *parcel, int socket_handle)
 
 void start_ssl(MParcel *parcel, int socket_handle)
 {
-   int bytes_sent, bytes_read;
+   int bytes_read;
    STalker *pstk = parcel->stalker;
    const char *host = parcel->host_url;
 
@@ -315,14 +337,17 @@ void start_ssl(MParcel *parcel, int socket_handle)
                parcel->stalker = pstk = &talker;
 
                advise_message(parcel, "About to resend EHLO to get authorization information.", NULL);
-               parcel->total_sent += bytes_sent = stk_send_line(pstk, "EHLO ", host, NULL);
-               parcel->total_read += bytes_read = stk_recv_line(pstk, buffer, sizeof(buffer));
-               parse_greeting_response(parcel, buffer, sizeof(buffer));
+               send_data(parcel, "EHLO ", host, NULL);
+               bytes_read = recv_data(parcel, buffer, sizeof(buffer));
+               parse_greeting_response(parcel, buffer, bytes_read);
 
                advise_message(parcel, "ssl protocol initialized.", NULL);
 
-               // Send execution back to the caller:
-               start_callback(parcel);
+               if (authorize_session(parcel))
+               {
+                  // Send execution back to the caller:
+                  notify_mailer(parcel);
+               }
 
                // Restore previous STalker for when the SSL session is abandoned.
                // I would have put it after SSL_free(), but that reverses the SSL_new()
@@ -358,10 +383,119 @@ void start_ssl(MParcel *parcel, int socket_handle)
    }
    else
       log_message(parcel, "Failed to get an SSL method.", NULL);
-   
 }
 
-void start_callback(MParcel *parcel)
+void message_auth_prompts(MParcel *parcel, const char *buffer, int len)
+{
+   printf("[34;1m%s[m with %d characters\n", buffer, len);
+
+   int declen = c64_decode_chars_needed(len-4);
+   char *tbuff = (char*)alloca(declen+1);
+
+   c64_decode_to_buffer(&buffer[4], tbuff, declen+1);
+   tbuff[declen] = '\0';
+
+   advise_message(parcel, "Server responds: \"", tbuff, "\"", NULL);
+}
+
+int authorize_session(MParcel *parcel)
+{
+   char buffer[1024];
+   int bytes_received;
+   int reply_status;
+
+   const char *login = parcel->login;
+   const char *password = parcel->password;
+
+   int use_plain = parcel->caps.cap_auth_plain;
+   int use_login = parcel->caps.cap_auth_login;
+
+   const char *auth_type = (use_plain?"PLAIN":(use_login?"LOGIN":NULL));
+
+   // PLAIN accepts concatenated \0login\0password string (both prefixed with NULL character).
+   // LOGIN accepts separate login and password submissions
+
+
+   if (auth_type)
+   {
+      /* send_data(parcel, "AUTH ", auth_type, NULL); */
+      send_data(parcel, "AUTH LOGIN", NULL);
+      bytes_received = recv_data(parcel, buffer, sizeof(buffer));
+      buffer[bytes_received] = '\0';
+      message_auth_prompts(parcel, buffer, bytes_received);
+      reply_status = atoi(buffer);
+      if (reply_status >= 300 && reply_status < 400)
+      {
+         c64_encode_to_buffer(login, strlen(login), (uint32_t*)&buffer, sizeof(buffer));
+         advise_message(parcel,
+                        "Sending user name, ",
+                        login,
+                        ", encoded as ",
+                        buffer,
+                        ", to the server.",
+                        NULL);
+
+         send_data(parcel, buffer, NULL);
+         bytes_received = recv_data(parcel, buffer, sizeof(buffer));
+         buffer[bytes_received] = '\0';
+         message_auth_prompts(parcel, buffer, bytes_received);
+         reply_status = atoi(buffer);
+         if (reply_status >= 300 && reply_status < 400)
+         {
+            c64_encode_to_buffer(password, strlen(password), (uint32_t*)&buffer, sizeof(buffer));
+            advise_message(parcel,
+                           "Sending password, ",
+                           password,
+                           ", encoded as ",
+                           buffer,
+                           ", to the server.",
+                           NULL);
+
+            send_data(parcel, buffer, NULL);
+            bytes_received = recv_data(parcel, buffer, sizeof(buffer));
+            buffer[bytes_received] = '\0';
+            reply_status = atoi(buffer);
+            if (reply_status >= 200 && reply_status < 300)
+               return 1;
+            else
+               log_message(parcel,
+                           "For login name, ",
+                           login,
+                           ", the password, ",
+                           password,
+                           ", was not accepted by the server.",
+                           " (",
+                           buffer,
+                           ")",
+                           NULL);
+
+
+         }
+         else
+            log_message(parcel,
+                        "Login name, ",
+                        login,
+                        ", not accepted by the server.",
+                        " (",
+                        buffer,
+                        ")",
+                        NULL);
+      }
+      else
+         log_message(parcel,
+                     "Authorization request failed with \"",
+                     buffer,
+                     "\"",
+                     NULL);
+   }
+   else
+      log_message(parcel, "mailcb only supports PLAIN and LOGIN authorization.", NULL);
+
+
+   return 0;
+}
+
+void notify_mailer(MParcel *parcel)
 {
    char buffer[512];
 
@@ -371,8 +505,154 @@ void start_callback(MParcel *parcel)
       log_message(parcel, "No callback function provided to continue emailing.", NULL);
 
    // Politely terminate connection with server
-   parcel->total_sent = stk_send_line(parcel->stalker, "QUIT", NULL);
-   parcel->total_read = stk_recv_line(parcel->stalker, buffer, sizeof(buffer));
+   send_data(parcel, "QUIT", NULL);
+   recv_data(parcel, buffer, sizeof(buffer));
+
+   advise_message(parcel, "SMTP server sendoff.", NULL);
+}
+
+int send_envelope(MParcel *parcel, const char **recipients)
+{
+   if (!recipients)
+      return 0;
+
+   char buffer[1024];
+   const char **ptr = recipients;
+
+   int bytes_read;
+   int recipients_accepted = 0;
+   int reply_status;
+   send_data(parcel, "MAIL FROM: <", parcel->user, ">", NULL);
+   bytes_read = recv_data(parcel, buffer, sizeof(buffer));
+
+   reply_status = atoi(buffer);
+   if (reply_status >= 200 && reply_status < 300)
+   {
+      while (*ptr)
+      {
+         send_data(parcel, "RCPT TO: <", *ptr, ">", NULL);
+         bytes_read = recv_data(parcel, buffer, sizeof(buffer));
+         buffer[bytes_read] = '\0';
+         reply_status = atoi(buffer);
+         if (reply_status >= 200 && reply_status < 300)
+            ++recipients_accepted;
+         else
+            log_message(parcel, "Recipient, ", *ptr, ", was turned down by the server, ", buffer,  NULL);
+
+         ++ptr;
+      }
+
+      if (recipients_accepted)
+      {
+         send_data(parcel, "DATA", NULL);
+         bytes_read = recv_data(parcel, buffer, sizeof(buffer));
+         reply_status = atoi(buffer);
+         if (reply_status >= 300 && reply_status < 400)
+            return 1;
+         else
+         {
+            buffer[bytes_read] = '\0';
+            log_message(parcel, "Envelope transmission failed, \"", buffer, "\"", NULL);
+         }
+      }
+      else
+         log_message(parcel, "Emailing aborted for lack of approved recipients.", NULL);
+   }
+   else
+   {
+      log_message(parcel,
+                  "From field (",
+                  parcel->user,
+                  ") of SMTP envelope caused an error,\"",
+                  buffer,
+                  "\"",
+                  NULL);
+   }
    
+   return 0;
+}
+
+int send_headers(MParcel *parcel, const char **recipients, const char **headers)
+{
+   if (!recipients)
+      return 0;
+
+   const char **ptr = recipients;
+
+   send_data(parcel, "From: ", parcel->user, NULL);
+
+   // Send all the recipients
+   while (*ptr)
+   {
+      send_data(parcel, "To: ", *ptr, NULL);
+      ++ptr;
+   }
+
+   // Send all the headers
+   ptr = headers;
+   while (*ptr)
+   {
+      send_data(parcel, *ptr, NULL);
+      ++ptr;
+   }
+
+   // Send blank line to terminate headers
+   send_data(parcel, "", NULL);
+
+   return 1;
+}
+
+/**
+ * Send an email through an established connection.
+ *
+ * @param recipients Null-terminated list of pointers to recipients
+ *                   that will be included in the envelope (RCVT TO:)
+ * @param headers    Null-terminated list of email headers to be
+ *                   sent before the message.
+ * @param msg        Text of message to be sent.
+ */
+void send_email(MParcel *parcel,
+                const char **recipients,
+                const char **headers,
+                const char *msg)
+{
+   char buffer[1024];
+   int bytes_read;
+   int reply_status;
+
+   if (send_envelope(parcel, recipients))
+   {
+      advise_message(parcel, "Server accepted the envelope.", NULL);
+ 
+      if (send_headers(parcel, recipients, headers))
+      {
+         advise_message(parcel, "Server accepted the headers.", NULL);
+ 
+         send_data(parcel, msg, NULL);
+         send_data(parcel, ".", NULL);
+
+         bytes_read = recv_data(parcel, buffer, sizeof(buffer));
+         if (bytes_read > 0)
+         {
+            reply_status = atoi(buffer);
+            if (reply_status >=200 && reply_status < 300)
+               advise_message(parcel, "Message was sent to ", *recipients, ".", NULL);
+            else
+            {
+               buffer[bytes_read] = '\0';
+               log_message(parcel,
+                           "The message to ",
+                           *recipients,
+                           "failed, saying \"",
+                           buffer,
+                           "\"",
+                           NULL);
+            }
+         }
+         else
+            log_message(parcel, "The server failed to respond.", NULL);
+      }
+   }
+
 }
 

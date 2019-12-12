@@ -576,25 +576,24 @@ void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
 void prepare_talker(MParcel *parcel, ServerReady talker_user)
 {
    const char *host = parcel->host_url;
-   int         port = parcel->port;
+   int         port = parcel->host_port;
    int         use_tls = parcel->starttls;
 
    int osocket = get_connected_socket(host, port);
    if (osocket)
    {
-      STalker talker;
-
-      parcel->stalker = pstk = &talker;
-
       if (use_tls)
-      {
-      }
+         open_ssl(parcel, osocket, talker_user);
       else
       {
+         STalker talker;
          init_sock_talker(&talker, osocket);
          parcel->stalker = &talker;
+
          (*talker_user)(parcel);
       }
+
+      close(osocket);
    }
 }
 

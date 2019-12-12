@@ -102,12 +102,19 @@ int itoa_buff(int value, int base, char *buffer, int buffer_len);
 void parse_greeting_response(MParcel *parcel, const char *buffer, int buffer_len);
 
 int get_connected_socket(const char *host_url, int port);
+
+
+
 int authorize_session(MParcel *parcel);
 
 int greet_server(MParcel *parcel, int socket_handle);
 void start_ssl(MParcel *parcel, int socket_handle);
 
 void notify_mailer(MParcel *parcel);
+
+void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user);
+void prepare_talker(MParcel *parcel, ServerReady talker_user);
+
 
 void send_email(MParcel *parcel,
                 const char **recipients,

@@ -511,6 +511,100 @@ void notify_mailer(MParcel *parcel)
    advise_message(parcel, "SMTP server sendoff.", NULL);
 }
 
+void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
+{
+   const SSL_METHOD *method;
+   SSL_CTX *context;
+   SSL *ssl;
+   int connect_outcome;
+
+   OpenSSL_add_all_algorithms();
+   /* err_load_bio_strings(); */
+   ERR_load_crypto_strings();
+   SSL_load_error_strings();
+
+   /* openssl_config(null); */
+
+   SSL_library_init();
+
+   method = SSLv23_client_method();
+   if (method)
+   {
+      context = SSL_CTX_new(method);
+
+      if (context)
+      {
+         // following two not included in most recent example code i found.
+         // it may be appropriate to uncomment these lines as i learn more.
+         /* ssl_ctx_set_verify(context, ssl_verify_peer, null); */
+         /* ssl_ctx_set_verify_depth(context, 4); */
+
+         // we could set some flags, but i'm not doing it until i need to and i understand 'em
+         /* const long ctx_flags = ssl_op_no_sslv2 | ssl_op_no_sslv3 | ssl_op_no_compression; */
+         /* ssl_ctx_set_options(context, ctx_flags); */
+         SSL_CTX_set_options(context, SSL_OP_NO_SSLv2);
+
+         ssl = SSL_new(context);
+         if (ssl)
+         {
+            SSL_set_fd(ssl, socket_handle);
+
+            connect_outcome = SSL_connect(ssl);
+
+            if (connect_outcome == 1)
+            {
+               STalker talker;
+               init_ssl_talker(&talker, ssl);
+               parcel->stalker = &talker;
+               (*talker_user)(parcel);
+            }
+
+            SSL_free(ssl);
+         }
+         else
+            log_message(parcel, "Failed to create a new SSL instance.", NULL);
+
+         SSL_CTX_free(context);
+      }
+      else
+         log_message(parcel, "Failed to initiate an SSL context.", NULL);
+   }
+   else
+      log_message(parcel, "Failed to find SSL client method.", NULL);
+}
+
+void prepare_talker(MParcel *parcel, ServerReady talker_user)
+{
+   const char *host = parcel->host_url;
+   int         port = parcel->port;
+   int         use_tls = parcel->starttls;
+
+   int osocket = get_connected_socket(host, port);
+   if (osocket)
+   {
+      STalker talker;
+
+      parcel->stalker = pstk = &talker;
+
+      if (use_tls)
+      {
+      }
+      else
+      {
+         init_sock_talker(&talker, osocket);
+         parcel->stalker = &talker;
+         (*talker_user)(parcel);
+      }
+   }
+}
+
+
+/**
+ * @brief Internal function for send_email() to send an email envelope.
+ *
+ * @param recipients is an array of pointers to const char*, with a
+ *                   final pointer to NULL to mark the end of the list.
+ */
 int send_envelope(MParcel *parcel, const char **recipients)
 {
    if (!recipients)
@@ -572,6 +666,9 @@ int send_envelope(MParcel *parcel, const char **recipients)
    return 0;
 }
 
+/**
+ * @brief Internal function for send_email() to send email headers.
+ */
 int send_headers(MParcel *parcel, const char **recipients, const char **headers)
 {
    if (!recipients)

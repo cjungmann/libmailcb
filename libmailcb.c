@@ -234,7 +234,7 @@ int get_connected_socket(const char *host_url, int port)
    return open_socket;
 }
 
-int greet_server(MParcel *parcel, int socket_handle)
+int greet_smtp_server(MParcel *parcel, int socket_handle)
 {
    int reply_status;
    int bytes_read;

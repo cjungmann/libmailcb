@@ -46,10 +46,14 @@ void server_notice_text(MParcel *parcel)
               "want to test a bulk email sender.");
 }
 
-void server_notice(MParcel *parcel)
+void smtp_server_notice(MParcel *parcel)
 {
    server_notice_text(parcel);
    server_notice_html(parcel);
+}
+
+void pop_server_notice(MParcel *parcel)
+{
 }
 
 void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
@@ -114,7 +118,7 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
    if (osocket)
    {
       advise_message(parcel, "Socket opened, about to begin conversation.", NULL);
-      greet_server(parcel, osocket);
+      greet_smtp_server(parcel, osocket);
       close(osocket);
    }
 }
@@ -123,7 +127,7 @@ int main(int argc, const char** argv)
 {
    MParcel mparcel;
    memset(&mparcel, 0, sizeof(mparcel));
-   mparcel.callback_func = server_notice;
+   mparcel.callback_func = smtp_server_notice;
 
    // process command line arguments:
    const char **cur_arg = argv;
@@ -175,6 +179,10 @@ int main(int argc, const char** argv)
                      mparcel.host_port = atoi(*++cur_arg);
                      goto continue_next_arg;
                   }
+                  break;
+               case 'r':  // POP3 reader
+                  mparcel.pop_reader = 1;
+                  mparcel.callback_func = pop_server_notice;
                   break;
                case 'q':  // quiet, suppress error messages
                   mparcel.quiet = 1;

@@ -643,7 +643,7 @@ void send_email(MParcel *parcel,
                log_message(parcel,
                            "The message to ",
                            *recipients,
-                           "failed, saying \"",
+                           " failed, saying \"",
                            buffer,
                            "\"",
                            NULL);

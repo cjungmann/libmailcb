@@ -141,17 +141,17 @@ int main(int argc, const char** argv)
          {
             switch(*str)
             {
-               case 'c':  // config file
-                  if (cur_arg + 1 < end_arg)
-                  {
-                     config_file_path = *++cur_arg;
-                     goto continue_next_arg;
-                  }
-                  break;
                case 'a':  // config account to use
                   if (cur_arg + 1 < end_arg)
                   {
                      mparcel.account = *++cur_arg;
+                     goto continue_next_arg;
+                  }
+                  break;
+               case 'c':  // config file
+                  if (cur_arg + 1 < end_arg)
+                  {
+                     config_file_path = *++cur_arg;
                      goto continue_next_arg;
                   }
                   break;
@@ -162,12 +162,25 @@ int main(int argc, const char** argv)
                      goto continue_next_arg;
                   }
                   break;
+               case 'l':  // login
+                  if (cur_arg + 1 < end_arg)
+                  {
+                     mparcel.login = *++cur_arg;
+                     goto continue_next_arg;
+                  }
+                  break;
                case 'p':  // port
                   if (cur_arg + 1 < end_arg)
                   {
                      mparcel.host_port = atoi(*++cur_arg);
                      goto continue_next_arg;
                   }
+                  break;
+               case 'q':  // quiet, suppress error messages
+                  mparcel.quiet = 1;
+                  break;
+               case 't':   // tls
+                  mparcel.starttls = 1;
                   break;
                case 'u':  // user
                   if (cur_arg + 1 < end_arg)
@@ -176,12 +189,8 @@ int main(int argc, const char** argv)
                      goto continue_next_arg;
                   }
                   break;
-               case 'l':  // login
-                  if (cur_arg + 1 < end_arg)
-                  {
-                     mparcel.login = *++cur_arg;
-                     goto continue_next_arg;
-                  }
+               case 'v':  // verbose messages
+                  mparcel.verbose = 1;
                   break;
                case 'w':  // passWord
                   if (cur_arg + 1 < end_arg)
@@ -189,17 +198,6 @@ int main(int argc, const char** argv)
                      mparcel.password = *++cur_arg;
                      goto continue_next_arg;
                   }
-
-               case 't':   // tls
-                  mparcel.starttls = 1;
-                  break;
-               case 'v':  // verbose messages
-                  mparcel.verbose = 1;
-                  break;
-               case 'q':  // suppress error messages
-                  mparcel.quiet = 1;
-                  break;
-
                default:
                   break;
             }

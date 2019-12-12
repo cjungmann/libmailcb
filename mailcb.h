@@ -51,10 +51,12 @@ typedef struct _smtp_caps
 
 typedef struct _comm_parcel
 {
-   /** Details for making the SMTP connection. */
+   /** Details for making the mail connection. */
    const char *host_url;
    int host_port;
    int starttls;
+
+   int pop_reader;
 
    /** Tracking variables */
    int total_sent;
@@ -107,7 +109,7 @@ int get_connected_socket(const char *host_url, int port);
 
 int authorize_session(MParcel *parcel);
 
-int greet_server(MParcel *parcel, int socket_handle);
+int greet_smtp_server(MParcel *parcel, int socket_handle);
 void start_ssl(MParcel *parcel, int socket_handle);
 
 void notify_mailer(MParcel *parcel);

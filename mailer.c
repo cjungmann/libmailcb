@@ -17,7 +17,24 @@ int update_if_needed(const char *name, const ri_Line *line, const char **target,
    return 0;
 }
 
-void server_notice(MParcel *parcel)
+void server_notice_html(MParcel *parcel)
+{
+   printf("Got notice from MailCB.  Sending HTML message.\n");
+   send_email(parcel,
+              (const char*[]){"chuck@cpjj.net", "chuckjungmann@gmail.com", NULL},
+              (const char*[]){"Subject: SMTP Server Debugging with HTML message", NULL},
+              "<html>\n"
+              "<body>\n"
+              "<p>\n"
+              "</p>\n"
+              "The message is required in order to make a complete email\n"
+              "package.  Please don't misinterpret my intentions.  I only\n"
+              "want to test a bulk email sender.\n"
+              "</body>\n"
+              "</html>");
+}
+
+void server_notice_text(MParcel *parcel)
 {
    printf("Got notice from MailCB.\n");
 
@@ -27,6 +44,12 @@ void server_notice(MParcel *parcel)
               "The message is required in order to make a complete email\n"
               "package.  Please don't misinterpret my intentions.  I only\n"
               "want to test a bulk email sender.");
+}
+
+void server_notice(MParcel *parcel)
+{
+   server_notice_text(parcel);
+   server_notice_html(parcel);
 }
 
 void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)

@@ -20,40 +20,57 @@ int update_if_needed(const char *name, const ri_Line *line, const char **target,
 void server_notice_html(MParcel *parcel)
 {
    printf("Got notice from MailCB.  Sending HTML message.\n");
-   send_email(parcel,
-              (const char*[]){"chuck@cpjj.net", "chuckjungmann@gmail.com", NULL},
-              (const char*[]){"Subject: SMTP Server Debugging with HTML message", NULL},
-              "<html>\n"
-              "<body>\n"
-              "<p>\n"
-              "</p>\n"
-              "The message is required in order to make a complete email\n"
-              "package.  Please don't misinterpret my intentions.  I only\n"
-              "want to test a bulk email sender.\n"
-              "</body>\n"
-              "</html>");
+   mcb_send_email(parcel,
+                  (const char*[]){"chuck@cpjj.net", "chuckjungmann@gmail.com", NULL},
+                  (const char*[]){"Subject: SMTP Server Debugging with HTML message", NULL},
+                  "<html>\n"
+                  "<body>\n"
+                  "<p>\n"
+                  "</p>\n"
+                  "The message is required in order to make a complete email\n"
+                  "package.  Please don't misinterpret my intentions.  I only\n"
+                  "want to test a bulk email sender.\n"
+                  "</body>\n"
+                  "</html>");
 }
 
 void server_notice_text(MParcel *parcel)
 {
    printf("Got notice from MailCB.\n");
 
-   send_email(parcel,
-              (const char*[]){"chuck@cpjj.net", NULL},
-              (const char*[]){"Subject: SMTP Server Debugging", NULL},
-              "The message is required in order to make a complete email\n"
-              "package.  Please don't misinterpret my intentions.  I only\n"
-              "want to test a bulk email sender.");
+   mcb_send_email(parcel,
+                  (const char*[]){"chuck@cpjj.net", NULL},
+                  (const char*[]){"Subject: SMTP Server Debugging", NULL},
+                  "The message is required in order to make a complete email\n"
+                  "package.  Please don't misinterpret my intentions.  I only\n"
+                  "want to test a bulk email sender.");
 }
 
-void smtp_server_notice(MParcel *parcel)
+void begin_smtp_conversation(MParcel *parcel)
 {
-   server_notice_text(parcel);
-   server_notice_html(parcel);
+   if (authorize_smtp_session(parcel))
+   {
+      server_notice_text(parcel);
+      server_notice_html(parcel);
+   }
 }
 
-void pop_server_notice(MParcel *parcel)
+void begin_pop_conversation(MParcel *parcel)
 {
+   if (mcb_greet_pop_server(parcel))
+   {
+      mcb_advise_message(parcel, "Greeted the pop server.  Gonna go to town, now.", NULL);
+   }
+}
+
+void talker_user(MParcel *parcel)
+{
+   mcb_advise_message(parcel, "Entered the talker_user function.", NULL);
+
+   if (is_opening_smtp(parcel))
+      begin_smtp_conversation(parcel);
+   else
+      begin_pop_conversation(parcel);
 }
 
 void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
@@ -71,7 +88,7 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
 
       if (acct)
       {
-         advise_message(parcel, "Using configuration account \"", acct, "\"", NULL);
+         mcb_advise_message(parcel, "Using configuration account \"", acct, "\"", NULL);
 
          section = ri_get_section(root, acct);
          if (section)
@@ -97,11 +114,20 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
                   goto next_line;
                }
 
-               else if (0 == parcel->starttls
-                        && 0 == strcmp(line->tag, "use_tls")
-                        && 0 == strcmp(line->value, "on"))
+               if (0 == parcel->starttls
+                   && 0 == strcmp(line->tag, "use_tls")
+                   && 0 == strcmp(line->value, "on"))
                {
                   parcel->starttls = 1;
+                  goto next_line;
+               }
+
+               if (0 == parcel->pop_reader
+                   && 0 == strcmp(line->tag, "type")
+                   && 0 == strcmp(line->value, "pop"))
+               {
+                  parcel->pop_reader = 1;
+                  parcel->callback_func = begin_pop_conversation;
                   goto next_line;
                }
 
@@ -110,24 +136,34 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
             }
          }
          else
-            log_message(parcel, "Failed to find configuration account \"", acct, "\"", NULL);
+            mcb_log_message(parcel, "Failed to find configuration account \"", acct, "\"", NULL);
       }
    }
 
-   int osocket = get_connected_socket(parcel->host_url, parcel->host_port);
-   if (osocket)
-   {
-      advise_message(parcel, "Socket opened, about to begin conversation.", NULL);
-      greet_smtp_server(parcel, osocket);
-      close(osocket);
-   }
+   mcb_prepare_talker(parcel, talker_user);
+
+
+   /* int osocket = get_connected_socket(parcel->host_url, parcel->host_port); */
+   /* if (osocket) */
+   /* { */
+   /*    mcb_advise_message(parcel, "Socket opened, about to begin conversation.", NULL); */
+
+   /*    if (parcel->pop_reader) */
+   /*       greet_pop_server(parcel); */
+   /*    else */
+   /*       greet_smtp_server(parcel, osocket); */
+
+   /*    close(osocket); */
+   /* } */
 }
 
 int main(int argc, const char** argv)
 {
    MParcel mparcel;
    memset(&mparcel, 0, sizeof(mparcel));
-   mparcel.callback_func = smtp_server_notice;
+   mparcel.logfile = stderr;
+   mparcel.callback_func = begin_smtp_conversation;
+
 
    // process command line arguments:
    const char **cur_arg = argv;
@@ -182,7 +218,7 @@ int main(int argc, const char** argv)
                   break;
                case 'r':  // POP3 reader
                   mparcel.pop_reader = 1;
-                  mparcel.callback_func = pop_server_notice;
+                  mparcel.callback_func = begin_pop_conversation;
                   break;
                case 'q':  // quiet, suppress error messages
                   mparcel.quiet = 1;
@@ -220,14 +256,14 @@ int main(int argc, const char** argv)
    if (config_file_path
        && 0 == (access_result = access(config_file_path, F_OK|R_OK)))
    {
-      advise_message(&mparcel, "About to open config file \"", config_file_path, "\"", NULL);
+      mcb_advise_message(&mparcel, "About to open config file \"", config_file_path, "\"", NULL);
       ri_read_file(config_file_path,
                    begin_after_read_config_attempt,
                    (void*)&mparcel);
    }
    else
    {
-      advise_message(&mparcel, "Failed to find configuration file.", NULL);
+      mcb_advise_message(&mparcel, "Failed to find configuration file.", NULL);
       begin_after_read_config_attempt(NULL, (void*)&mparcel);
    }
 

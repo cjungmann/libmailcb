@@ -14,107 +14,6 @@
 
 #include "commparcel.c"
 
-/**
- * @brief Writes arguments (const char*s following MParcel*, terminated by NULL)
- *        only if MParcel::verbose is true.
- */
-void advise_message(const MParcel *mp, ...)
-{
-   va_list ap;
-   const char *str;
-
-   if (mp->verbose)
-   {
-      FILE *msgfile = stdout;
-
-      va_start(ap, mp);
-
-      while((str = va_arg(ap, char*)))
-         fputs(str, msgfile);
-
-      fputc('\n', msgfile);
-
-      va_end(ap);
-   }
-}
-
-/**
- * @brief Writes arguments (const char*s following MParcel*, terminated by NULL)
- *        only if MParcel::quiet is NOT true.
- */
-void log_message(const MParcel *mp, ...)
-{
-   va_list ap;
-   const char *str;
-
-   if (!mp->quiet)
-   {
-      FILE *msgfile = mp->logfile ? mp->logfile : stdout;
-      va_start(ap, mp);
-
-      while((str = va_arg(ap, char*)))
-         fputs(str, msgfile);
-
-      fputc('\n', msgfile);
-
-      va_end(ap);
-   }
-}
-
-int send_data(MParcel *mp, ...)
-{
-   int bytes_sent = 0;
-   va_list ap;
-   va_start(ap, mp);
-   
-   mp->total_sent += bytes_sent = stk_vsend_line(mp->stalker, ap);
-
-   va_end(ap);
-
-   return bytes_sent;
-}
-
-int recv_data(MParcel *mp, char *buffer, int len)
-{
-   int bytes_read;
-   mp->total_read += bytes_read =stk_recv_line(mp->stalker, buffer, len);
-   return bytes_read;
-}
-
-int digits_in_base(int value, int base)
-{
-   int count = 0;
-   while (value > 0)
-   {
-      ++count;
-      value /= base;
-   }
-
-   return count;
-}
-
-int itoa_buff(int value, int base, char *buffer, int buffer_len)
-{
-   int output_length = digits_in_base(value, base);
-
-   if (output_length < buffer_len)
-   {
-      memset(buffer, 0, buffer_len);
-      char *ptr = &buffer[output_length-1];
-
-      while (value > 0)
-      {
-         *ptr = (value % base) + '0';
-         --ptr;
-         value /= base;
-      }
-
-      return 1;
-   }
-   else
-      return 0;
-}
-
 CapString capstrings[] = {
    /* {"AUTH",                 4, set_auth}, */
    {"SIZE",                 4, set_size},
@@ -130,6 +29,56 @@ CapString capstrings[] = {
 int capstrings_count = sizeof(capstrings) / sizeof(CapString);
 const CapString *capstring_end = &capstrings[sizeof(capstrings) / sizeof(CapString)];
 
+void log_ssl_error(MParcel *parcel, const SSL *ssl, int ret)
+{
+   int error = SSL_get_error(ssl, ret);
+   const char *msg = NULL;
+   switch(error)
+   {
+      case SSL_ERROR_NONE:
+         msg = "SSL_ERROR_NONE";
+         break;
+
+      case SSL_ERROR_ZERO_RETURN:
+         msg = "SSL_ERROR_ZERO_RETURN";
+         break;
+      case SSL_ERROR_WANT_READ:
+         msg = "SSL_ERROR_WANT_READ";
+         break;
+      case SSL_ERROR_WANT_WRITE:
+         msg = "SSL_ERROR_WANT_WRITE";
+         break;
+      case SSL_ERROR_WANT_CONNECT:
+         msg = "SSL_ERROR_WANT_CONNECT";
+         break;
+      case SSL_ERROR_WANT_ACCEPT:
+         msg = "SSL_ERROR_WANT_ACCEPT";
+         break;
+      case SSL_ERROR_WANT_X509_LOOKUP:
+         msg = "SSL_ERROR_WANT_X509_LOOKUP";
+         break;
+      case SSL_ERROR_SYSCALL:
+         msg = "SSL_ERROR_SYSCALL";
+         break;
+      case SSL_ERROR_SSL:
+         msg = "SSL_ERROR_SSL";
+         break;
+      default:
+         msg = NULL;
+   }
+
+   if (msg)
+      mcb_log_message(parcel, "SSL failure: ", msg, NULL);
+   else
+   {
+      int dlen = mcb_digits_in_base(error, 10);
+      char *buffer = (char*)alloca(dlen);
+      mcb_itoa_buff(error, 10, buffer, dlen);
+
+      mcb_log_message(parcel, "Unrecognized SSL_get_error() response, \"", msg, "\"",  NULL);
+   }
+}
+
 void parse_capability_response(MParcel *parcel, const char *line, int line_len)
 {
    const CapString *ptr = capstrings;
@@ -142,7 +91,7 @@ void parse_capability_response(MParcel *parcel, const char *line, int line_len)
    }
 }
 
-void parse_greeting_response(MParcel *parcel, const char *buffer, int buffer_len)
+void parse_smtp_greeting_response(MParcel *parcel, const char *buffer, int buffer_len)
 {
    // walk_status_reply variables:
    int status;
@@ -189,9 +138,9 @@ int get_connected_socket(const char *host_url, int port)
    int exit_value;
    int open_socket, temp_socket = -1;
 
-   int port_buffer_len = digits_in_base(port, 10) + 1;
+   int port_buffer_len = mcb_digits_in_base(port, 10) + 1;
    char *port_buffer = (char*)alloca(port_buffer_len);
-   if (itoa_buff(port, 10, port_buffer, port_buffer_len))
+   if (mcb_itoa_buff(port, 10, port_buffer, port_buffer_len))
    {
       memset((void*)&hints, 0, sizeof(struct addrinfo));
       hints.ai_family = AF_INET;
@@ -251,24 +200,24 @@ int greet_smtp_server(MParcel *parcel, int socket_handle)
 
    // read response from socket connection?  i don't know why,
    // but we need to read the response before getting anything.
-   bytes_read = recv_data(parcel, buffer, sizeof(buffer));
+   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
 
-   advise_message(parcel, "about to greet server.", NULL);
+   mcb_advise_message(parcel, "about to greet server.", NULL);
 
-   send_data(parcel, "EHLO ", host, NULL);
-   bytes_read = recv_data(parcel, buffer, sizeof(buffer));
-   parse_greeting_response(parcel, buffer, bytes_read);
+   mcb_send_data(parcel, "EHLO ", host, NULL);
+   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+   parse_smtp_greeting_response(parcel, buffer, bytes_read);
 
    // if the profile asks for starttls and the server offers starttls, do it.
    if (parcel->starttls != 0 && get_starttls(parcel))
    {
-      send_data(parcel, "STARTTLS", NULL);
-      bytes_read = recv_data(parcel, buffer, sizeof(buffer));
+      mcb_send_data(parcel, "STARTTLS", NULL);
+      bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
       reply_status = atoi(buffer);
 
       if (reply_status >= 200 && reply_status < 300)
          start_ssl(parcel, socket_handle);
-      else if (authorize_session(parcel))
+      else if (authorize_smtp_session(parcel))
       {
          // Send execution back to the caller:
          notify_mailer(parcel);
@@ -277,10 +226,231 @@ int greet_smtp_server(MParcel *parcel, int socket_handle)
    else
    {
       printf("expected starttls in :\n[44;1m%.*s[m\n", bytes_read, buffer);
-      advise_message(parcel, "proceeding without starttls.", NULL);
+      mcb_advise_message(parcel, "proceeding without starttls.", NULL);
    }
 
    return 0;
+}
+
+int judge_pop_response(MParcel *parcel, const char *buffer, int len)
+{
+   if (buffer[0] == '+')
+      return 1;
+   else
+      mcb_log_message(parcel, "POP server error: ", &buffer[1], NULL);
+
+   return 0;
+}
+
+void parse_pop_stat(const char *buffer, int *count, int *inbox_size)
+{
+   const char *ptr = buffer;
+   *count = 0;
+   *inbox_size = 0;
+
+   while (!isdigit(*ptr))
+      ++ptr;
+
+   while (isdigit(*ptr))
+   {
+      *count *= 10;
+      *count += *ptr - '0';
+      ++ptr;
+   }
+
+   while (!isdigit(*ptr))
+      ++ptr;
+
+   while (isdigit(*ptr))
+   {
+      *inbox_size *= 10;
+      *inbox_size += *ptr - '0';
+      ++ptr;
+   }
+}
+
+void scan_pop_messages(PopClosure *popc)
+{
+   size_t bytes_received;
+   char buffer[1024];
+   char *bptr = buffer;
+   char *cursor;
+   char *bend = bptr + sizeof(buffer);
+
+   MsgHeader *root = NULL, *tail = NULL;
+
+   const char *tag;
+   int tag_len;
+   const char *value;
+   int value_len;
+
+   if (popc->message_index < popc->message_count)
+   {
+      mcb_itoa_buff(popc->message_index+1, 10, buffer, sizeof(buffer));
+      mcb_send_data(popc->parcel, "TOP ", buffer, " 0", NULL);
+
+      // Retrieve one-less-than buffer length to leave room for terminating \0:
+      bytes_received = mcb_recv_data(popc->parcel, buffer, sizeof(buffer-1));
+      // Then terminate the string in the buffer.
+      buffer[bytes_received] = '\0';
+
+      if (bytes_received > 0)
+      {
+         cursor = bptr = buffer;
+         if (0 == strncmp(bptr, "+OK ", 4))
+         {
+            cursor += 4;
+
+            tag = value = NULL;
+            tag_len = value_len = 0;
+
+            // Move ptr to start of next line:
+            while (++cursor < bend && *cursor != '\r')
+               ;
+
+            if (*(1+cursor) == '\n')
+            {
+               ++cursor;
+
+               // if we found the next line, move the ptr to save the position:
+               bptr = cursor;
+            }
+
+            // Process, line-by-line, until content end of current buffer.
+            // Important to ensure we're at the beginning of a line at loop top.
+
+            // While still within the current retrieved buffer:
+            while (cursor < bend)
+            {
+               // Process the current line
+
+               // Check for continuing value
+               if (*cursor == ' ')
+               {
+                  // Move ptr to start of next line:
+                  while (++cursor < bend)
+                  {
+                     if (*cursor == '\r' && *(cursor+1) == '\n')
+                     {
+                        ++cursor;
+                        break;
+                     }
+                  }
+
+                  if (*cursor == '\n')
+                     continue;
+                  // end of processing current line as a header value
+               }
+               else
+               {
+                  // if it's not a continuation, it's a new tag or the
+                  // end of the headers.  In either case, save the accumulated
+                  // value to a new header chain link, then proceed according
+                  // the the character following the newline.
+
+                  value = bptr;
+                  value_len = cursor - bptr;
+
+                  MsgHeader *newmh = (MsgHeader*)alloca(sizeof(MsgHeader));
+                  memset(newmh, 0, sizeof(MsgHeader));
+
+                  char *work = (char*)alloca(tag_len+1);
+                  memcpy(work, tag, tag_len);
+                  work[tag_len] = '\0';
+                  newmh->tag = work;
+
+                  work = (char*)alloca(value_len + 1);
+                  // Let's not copy the indenting:
+
+                  if (!root)
+                     root = tail = newmh;
+                  else
+                  {
+                     tail->next = newmh;
+                     tail = newmh;
+                  }
+
+                  // Now decide what to do next:
+                  if (0 == strncmp(cursor, "\r\n.", 3))
+                     goto end_of_message_header;
+
+                  // If we're still here, it's a new tag.  Read accordingly:
+                  // reset variables for next tag and value:
+                  tag = value = NULL;
+                  tag_len = value_len = 0;
+                  bptr = cursor;
+
+                  // get to end of tag
+                  while (++cursor < bend)
+                  {
+                     if (isspace(*cursor) || *cursor!=':')
+                     {
+                        tag = bptr;
+                        tag_len = cursor - bptr;
+                        break;
+                     }
+                  }
+
+                  // Move to beginning of value
+                  while (++cursor < bend)
+                  {
+                     if (!(isspace(*cursor) || *cursor==':'))
+                     {
+                        bptr = cursor;
+                        break;
+                     }
+                  }
+
+                  // Find the end of the line before starting at the top of the buffer loop:
+                  while (++cursor < bend)
+                  {
+                     if (*cursor=='\r' && *(cursor+1)=='\n')
+                        break;
+                  };
+               }  // end of if (*cursor == ' ')
+
+
+               }
+            } // When this loop exits, we need to refill the buffer or quit
+
+
+         }
+
+        end_of_message_header:
+         ;
+
+      bptr = buffer;
+   }
+}
+
+void greet_pop_server(MParcel *parcel)
+{
+   char buffer[1024];
+   // read response from socket connection?  i don't know why,
+   // but we need to read the response before getting anything.
+   int bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+
+   mcb_send_data(parcel, "USER ", parcel->user, NULL);
+   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+   buffer[bytes_read] = '\0';
+   if (judge_pop_response(parcel, buffer, bytes_read))
+   {
+      mcb_send_data(parcel, "PASS", parcel->password, NULL);
+      bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+      buffer[bytes_read] = '\0';
+      if (judge_pop_response(parcel, buffer, bytes_read))
+      {
+         mcb_send_data(parcel, "STAT", parcel->password, NULL);
+         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+         buffer[bytes_read] = '\0';
+         if (judge_pop_response(parcel, buffer, bytes_read))
+         {
+            PopClosure popc = { parcel, 0, 0, 0 };
+            parse_pop_stat(buffer, &popc.message_count, &popc.inbox_size);
+         }
+      }
+   }
+
 }
 
 void start_ssl(MParcel *parcel, int socket_handle)
@@ -336,14 +506,14 @@ void start_ssl(MParcel *parcel, int socket_handle)
 
                parcel->stalker = pstk = &talker;
 
-               advise_message(parcel, "About to resend EHLO to get authorization information.", NULL);
-               send_data(parcel, "EHLO ", host, NULL);
-               bytes_read = recv_data(parcel, buffer, sizeof(buffer));
-               parse_greeting_response(parcel, buffer, bytes_read);
+               mcb_advise_message(parcel, "About to resend EHLO to get authorization information.", NULL);
+               mcb_send_data(parcel, "EHLO ", host, NULL);
+               bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+               parse_smtp_greeting_response(parcel, buffer, bytes_read);
 
-               advise_message(parcel, "ssl protocol initialized.", NULL);
+               mcb_advise_message(parcel, "ssl protocol initialized.", NULL);
 
-               if (authorize_session(parcel))
+               if (authorize_smtp_session(parcel))
                {
                   // Send execution back to the caller:
                   notify_mailer(parcel);
@@ -357,10 +527,10 @@ void start_ssl(MParcel *parcel, int socket_handle)
             }
             else if (connect_outcome == 0)
                // failed with controlled shutdown
-               log_message(parcel, "ssl connection failed and was cleaned up.", NULL);
+               mcb_log_message(parcel, "ssl connection failed and was cleaned up.", NULL);
             else
             {
-               log_message(parcel, "ssl connection failed and aborted.", NULL);
+               mcb_log_message(parcel, "ssl connection failed and aborted.", NULL);
                /* present_ssl_error(ssl_get_error(ssl, connect_outcome)); */
                ERR_print_errors_fp(parcel->logfile);
             }
@@ -369,7 +539,7 @@ void start_ssl(MParcel *parcel, int socket_handle)
          }
          else  // failed to get an ssl
          {
-            log_message(parcel, "failed to get an ssl object.", NULL);
+            mcb_log_message(parcel, "failed to get an ssl object.", NULL);
             ERR_print_errors_fp(parcel->logfile);
          }
 
@@ -377,12 +547,12 @@ void start_ssl(MParcel *parcel, int socket_handle)
       }
       else // failed to get a context
       {
-         log_message(parcel, "Failed to get an SSL context.", NULL);
+         mcb_log_message(parcel, "Failed to get an SSL context.", NULL);
          ERR_print_errors_fp(parcel->logfile);
       }
    }
    else
-      log_message(parcel, "Failed to get an SSL method.", NULL);
+      mcb_log_message(parcel, "Failed to get an SSL method.", NULL);
 }
 
 void message_auth_prompts(MParcel *parcel, const char *buffer, int len)
@@ -395,10 +565,20 @@ void message_auth_prompts(MParcel *parcel, const char *buffer, int len)
    c64_decode_to_buffer(&buffer[4], tbuff, declen+1);
    tbuff[declen] = '\0';
 
-   advise_message(parcel, "Server responds: \"", tbuff, "\"", NULL);
+   mcb_advise_message(parcel, "Server responds: \"", tbuff, "\"", NULL);
 }
 
-int authorize_session(MParcel *parcel)
+void initialize_smtp_session(MParcel *parcel)
+{
+   char buffer[1024];
+   int bytes_read;
+
+   mcb_send_data(parcel, "EHLO ", parcel->host_url, NULL);
+   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+   parse_smtp_greeting_response(parcel, buffer, bytes_read);
+}
+
+int authorize_smtp_session(MParcel *parcel)
 {
    char buffer[1024];
    int bytes_received;
@@ -418,16 +598,16 @@ int authorize_session(MParcel *parcel)
 
    if (auth_type)
    {
-      /* send_data(parcel, "AUTH ", auth_type, NULL); */
-      send_data(parcel, "AUTH LOGIN", NULL);
-      bytes_received = recv_data(parcel, buffer, sizeof(buffer));
+      /* mcb_send_data(parcel, "AUTH ", auth_type, NULL); */
+      mcb_send_data(parcel, "AUTH LOGIN", NULL);
+      bytes_received = mcb_recv_data(parcel, buffer, sizeof(buffer));
       buffer[bytes_received] = '\0';
       message_auth_prompts(parcel, buffer, bytes_received);
       reply_status = atoi(buffer);
       if (reply_status >= 300 && reply_status < 400)
       {
          c64_encode_to_buffer(login, strlen(login), (uint32_t*)&buffer, sizeof(buffer));
-         advise_message(parcel,
+         mcb_advise_message(parcel,
                         "Sending user name, ",
                         login,
                         ", encoded as ",
@@ -435,15 +615,15 @@ int authorize_session(MParcel *parcel)
                         ", to the server.",
                         NULL);
 
-         send_data(parcel, buffer, NULL);
-         bytes_received = recv_data(parcel, buffer, sizeof(buffer));
+         mcb_send_data(parcel, buffer, NULL);
+         bytes_received = mcb_recv_data(parcel, buffer, sizeof(buffer));
          buffer[bytes_received] = '\0';
          message_auth_prompts(parcel, buffer, bytes_received);
          reply_status = atoi(buffer);
          if (reply_status >= 300 && reply_status < 400)
          {
             c64_encode_to_buffer(password, strlen(password), (uint32_t*)&buffer, sizeof(buffer));
-            advise_message(parcel,
+            mcb_advise_message(parcel,
                            "Sending password, ",
                            password,
                            ", encoded as ",
@@ -451,14 +631,14 @@ int authorize_session(MParcel *parcel)
                            ", to the server.",
                            NULL);
 
-            send_data(parcel, buffer, NULL);
-            bytes_received = recv_data(parcel, buffer, sizeof(buffer));
+            mcb_send_data(parcel, buffer, NULL);
+            bytes_received = mcb_recv_data(parcel, buffer, sizeof(buffer));
             buffer[bytes_received] = '\0';
             reply_status = atoi(buffer);
             if (reply_status >= 200 && reply_status < 300)
                return 1;
             else
-               log_message(parcel,
+               mcb_log_message(parcel,
                            "For login name, ",
                            login,
                            ", the password, ",
@@ -472,7 +652,7 @@ int authorize_session(MParcel *parcel)
 
          }
          else
-            log_message(parcel,
+            mcb_log_message(parcel,
                         "Login name, ",
                         login,
                         ", not accepted by the server.",
@@ -482,14 +662,14 @@ int authorize_session(MParcel *parcel)
                         NULL);
       }
       else
-         log_message(parcel,
+         mcb_log_message(parcel,
                      "Authorization request failed with \"",
                      buffer,
                      "\"",
                      NULL);
    }
    else
-      log_message(parcel, "mailcb only supports PLAIN and LOGIN authorization.", NULL);
+      mcb_log_message(parcel, "mailcb only supports PLAIN and LOGIN authorization.", NULL);
 
 
    return 0;
@@ -502,13 +682,13 @@ void notify_mailer(MParcel *parcel)
    if (parcel->callback_func)
       (*parcel->callback_func)(parcel);
    else
-      log_message(parcel, "No callback function provided to continue emailing.", NULL);
+      mcb_log_message(parcel, "No callback function provided to continue emailing.", NULL);
 
    // Politely terminate connection with server
-   send_data(parcel, "QUIT", NULL);
-   recv_data(parcel, buffer, sizeof(buffer));
+   mcb_send_data(parcel, "QUIT", NULL);
+   mcb_recv_data(parcel, buffer, sizeof(buffer));
 
-   advise_message(parcel, "SMTP server sendoff.", NULL);
+   mcb_advise_message(parcel, "SMTP server sendoff.", NULL);
 }
 
 void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
@@ -524,6 +704,8 @@ void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
    SSL_load_error_strings();
 
    /* openssl_config(null); */
+
+   mcb_advise_message(parcel, "About to open SSL", NULL);
 
    SSL_library_init();
 
@@ -556,50 +738,241 @@ void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
                STalker talker;
                init_ssl_talker(&talker, ssl);
                parcel->stalker = &talker;
+
+               // Gmail advertises different capabilities after SSL initialization:
+               if (is_opening_smtp(parcel))
+                  initialize_smtp_session(parcel);
+
                (*talker_user)(parcel);
+            }
+            else if (connect_outcome == 0)
+            {
+               // failed with controlled shutdown
+               log_ssl_error(parcel, ssl, connect_outcome);
+               mcb_log_message(parcel, "ssl connection failed and was cleaned up.", NULL);
+            }
+            else
+            {
+               log_ssl_error(parcel, ssl, connect_outcome);
+               mcb_log_message(parcel, "ssl connection failed and aborted.", NULL);
+               mcb_log_message(parcel, "host: ", parcel->host_url, ", user: ", parcel->user, NULL);
             }
 
             SSL_free(ssl);
          }
          else
-            log_message(parcel, "Failed to create a new SSL instance.", NULL);
+            mcb_log_message(parcel, "Failed to create a new SSL instance.", NULL);
 
          SSL_CTX_free(context);
       }
       else
-         log_message(parcel, "Failed to initiate an SSL context.", NULL);
+         mcb_log_message(parcel, "Failed to initiate an SSL context.", NULL);
    }
    else
-      log_message(parcel, "Failed to find SSL client method.", NULL);
+      mcb_log_message(parcel, "Failed to find SSL client method.", NULL);
 }
 
-void prepare_talker(MParcel *parcel, ServerReady talker_user)
+/**
+ * @brief Writes arguments (const char*s following MParcel*, terminated by NULL)
+ *        only if MParcel::verbose is true.
+ */
+void mcb_advise_message(const MParcel *mp, ...)
+{
+   va_list ap;
+   const char *str;
+
+   if (mp->verbose)
+   {
+      FILE *msgfile = stdout;
+
+      va_start(ap, mp);
+
+      while((str = va_arg(ap, char*)))
+         fputs(str, msgfile);
+
+      fputc('\n', msgfile);
+
+      va_end(ap);
+   }
+}
+
+/**
+ * @brief Writes arguments (const char*s following MParcel*, terminated by NULL)
+ *        only if MParcel::quiet is NOT true.
+ */
+void mcb_log_message(const MParcel *mp, ...)
+{
+   va_list ap;
+   const char *str;
+
+   if (!mp->quiet)
+   {
+      FILE *msgfile = mp->logfile ? mp->logfile : stdout;
+      va_start(ap, mp);
+
+      while((str = va_arg(ap, char*)))
+         fputs(str, msgfile);
+
+      fputc('\n', msgfile);
+
+      va_end(ap);
+   }
+}
+
+int mcb_send_data(MParcel *mp, ...)
+{
+   int bytes_sent = 0;
+   va_list ap;
+   va_start(ap, mp);
+   
+   mp->total_sent += bytes_sent = stk_vsend_line(mp->stalker, ap);
+
+   va_end(ap);
+
+   return bytes_sent;
+}
+
+int mcb_recv_data(MParcel *mp, char *buffer, int len)
+{
+   int bytes_read;
+   mp->total_read += bytes_read =stk_recv_line(mp->stalker, buffer, len);
+   return bytes_read;
+}
+
+int mcb_digits_in_base(int value, int base)
+{
+   int count = 0;
+   while (value > 0)
+   {
+      ++count;
+      value /= base;
+   }
+
+   return count;
+}
+
+int mcb_itoa_buff(int value, int base, char *buffer, int buffer_len)
+{
+   int output_length = mcb_digits_in_base(value, base);
+
+   if (output_length < buffer_len)
+   {
+      memset(buffer, 0, buffer_len);
+      char *ptr = &buffer[output_length-1];
+
+      while (value > 0)
+      {
+         *ptr = (value % base) + '0';
+         --ptr;
+         value /= base;
+      }
+
+      return 1;
+   }
+   else
+      return 0;
+}
+
+/**
+ * @brief Initialize connection with specified URL on specified port.  Initializes TLS if requested.
+ *
+ * This function opens a socket, the opens SSL if requested.  In either case, a STalker
+ * object is initialized and returned to the caller through the MParcel pointer.
+ */
+void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
 {
    const char *host = parcel->host_url;
    int         port = parcel->host_port;
-   int         use_tls = parcel->starttls;
+
+   char        buffer[1024];
+   int         bytes_read;
 
    int osocket = get_connected_socket(host, port);
    if (osocket)
    {
-      if (use_tls)
-         open_ssl(parcel, osocket, talker_user);
-      else
-      {
-         STalker talker;
-         init_sock_talker(&talker, osocket);
-         parcel->stalker = &talker;
+      mcb_advise_message(parcel, "Got an open socket.", NULL);
 
-         (*talker_user)(parcel);
+      STalker talker;
+      init_sock_talker(&talker, osocket);
+      parcel->stalker = &talker;
+
+      bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+      fprintf(stderr, "Socket response: \"%.*s\".\n", bytes_read, buffer);
+
+      if (is_opening_smtp(parcel))
+      {
+         initialize_smtp_session(parcel);
+
+         if (parcel->caps.cap_starttls && parcel->starttls)
+         {
+            mcb_advise_message(parcel, "Starting TLS", NULL);
+
+            mcb_send_data(parcel, "STARTTLS", NULL);
+            bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+            buffer[bytes_read] = '\0';
+            mcb_advise_message(parcel, buffer, NULL);
+
+            /* int reply_status = atoi(buffer); */
+
+            open_ssl(parcel, osocket, talker_user);
+         }
+         else
+            // Not using SSL/TLS
+            (*talker_user)(parcel);
+
+         mcb_quit_smtp_server(parcel);
       }
+      else
+         // running POP
+         (*talker_user)(parcel);
 
       close(osocket);
    }
 }
 
+/**
+ * @brief Initialize SMTP server conversation, submitting credentials if appropriate.
+ *
+ * @return 1 if success. Calling function must terminate the conversation with "QUIT" message to server.
+ *         0 if failed.  Failure will terminate the conversation immediately,
+ */
+int mcb_greet_smtp_server(MParcel *parcel)
+{
+   char buffer[1024];
+   int bytes_read;
+
+   mcb_send_data(parcel, "EHLO ", parcel->host_url, NULL);
+   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+   parse_smtp_greeting_response(parcel, buffer, bytes_read);
+
+   if (authorize_smtp_session(parcel))
+      return 1;
+   else
+   {
+      mcb_quit_smtp_server(parcel);
+      return 0;
+   }
+}
 
 /**
- * @brief Internal function for send_email() to send an email envelope.
+ * @brief Terminate SMTP server conversation (socket and/or SSL handle remain open).
+ */
+void mcb_quit_smtp_server(MParcel *parcel)
+{
+   char buffer[1024];
+   mcb_send_data(parcel, "QUIT", NULL);
+   mcb_recv_data(parcel, buffer, sizeof(buffer));
+
+   mcb_advise_message(parcel, "SMTP server sendoff.", NULL);
+}
+
+int mcb_greet_pop_server(MParcel *parcel)
+{
+   return 0;
+}
+
+/**
+ * @brief Internal function for mcb_send_email() to send an email envelope.
  *
  * @param recipients is an array of pointers to const char*, with a
  *                   final pointer to NULL to mark the end of the list.
@@ -615,45 +988,45 @@ int send_envelope(MParcel *parcel, const char **recipients)
    int bytes_read;
    int recipients_accepted = 0;
    int reply_status;
-   send_data(parcel, "MAIL FROM: <", parcel->user, ">", NULL);
-   bytes_read = recv_data(parcel, buffer, sizeof(buffer));
+   mcb_send_data(parcel, "MAIL FROM: <", parcel->user, ">", NULL);
+   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
 
    reply_status = atoi(buffer);
    if (reply_status >= 200 && reply_status < 300)
    {
       while (*ptr)
       {
-         send_data(parcel, "RCPT TO: <", *ptr, ">", NULL);
-         bytes_read = recv_data(parcel, buffer, sizeof(buffer));
+         mcb_send_data(parcel, "RCPT TO: <", *ptr, ">", NULL);
+         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
          buffer[bytes_read] = '\0';
          reply_status = atoi(buffer);
          if (reply_status >= 200 && reply_status < 300)
             ++recipients_accepted;
          else
-            log_message(parcel, "Recipient, ", *ptr, ", was turned down by the server, ", buffer,  NULL);
+            mcb_log_message(parcel, "Recipient, ", *ptr, ", was turned down by the server, ", buffer,  NULL);
 
          ++ptr;
       }
 
       if (recipients_accepted)
       {
-         send_data(parcel, "DATA", NULL);
-         bytes_read = recv_data(parcel, buffer, sizeof(buffer));
+         mcb_send_data(parcel, "DATA", NULL);
+         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
          reply_status = atoi(buffer);
          if (reply_status >= 300 && reply_status < 400)
             return 1;
          else
          {
             buffer[bytes_read] = '\0';
-            log_message(parcel, "Envelope transmission failed, \"", buffer, "\"", NULL);
+            mcb_log_message(parcel, "Envelope transmission failed, \"", buffer, "\"", NULL);
          }
       }
       else
-         log_message(parcel, "Emailing aborted for lack of approved recipients.", NULL);
+         mcb_log_message(parcel, "Emailing aborted for lack of approved recipients.", NULL);
    }
    else
    {
-      log_message(parcel,
+      mcb_log_message(parcel,
                   "From field (",
                   parcel->user,
                   ") of SMTP envelope caused an error,\"",
@@ -666,7 +1039,7 @@ int send_envelope(MParcel *parcel, const char **recipients)
 }
 
 /**
- * @brief Internal function for send_email() to send email headers.
+ * @brief Internal function for mcb_send_email() to send email headers.
  */
 int send_headers(MParcel *parcel, const char **recipients, const char **headers)
 {
@@ -675,12 +1048,12 @@ int send_headers(MParcel *parcel, const char **recipients, const char **headers)
 
    const char **ptr = recipients;
 
-   send_data(parcel, "From: ", parcel->user, NULL);
+   mcb_send_data(parcel, "From: ", parcel->user, NULL);
 
    // Send all the recipients
    while (*ptr)
    {
-      send_data(parcel, "To: ", *ptr, NULL);
+      mcb_send_data(parcel, "To: ", *ptr, NULL);
       ++ptr;
    }
 
@@ -688,12 +1061,12 @@ int send_headers(MParcel *parcel, const char **recipients, const char **headers)
    ptr = headers;
    while (*ptr)
    {
-      send_data(parcel, *ptr, NULL);
+      mcb_send_data(parcel, *ptr, NULL);
       ++ptr;
    }
 
    // Send blank line to terminate headers
-   send_data(parcel, "", NULL);
+   mcb_send_data(parcel, "", NULL);
 
    return 1;
 }
@@ -707,10 +1080,10 @@ int send_headers(MParcel *parcel, const char **recipients, const char **headers)
  *                   sent before the message.
  * @param msg        Text of message to be sent.
  */
-void send_email(MParcel *parcel,
-                const char **recipients,
-                const char **headers,
-                const char *msg)
+void mcb_send_email(MParcel *parcel,
+                    const char **recipients,
+                    const char **headers,
+                    const char *msg)
 {
    char buffer[1024];
    int bytes_read;
@@ -718,25 +1091,25 @@ void send_email(MParcel *parcel,
 
    if (send_envelope(parcel, recipients))
    {
-      advise_message(parcel, "Server accepted the envelope.", NULL);
+      mcb_advise_message(parcel, "Server accepted the envelope.", NULL);
  
       if (send_headers(parcel, recipients, headers))
       {
-         advise_message(parcel, "Server accepted the headers.", NULL);
+         mcb_advise_message(parcel, "Server accepted the headers.", NULL);
  
-         send_data(parcel, msg, NULL);
-         send_data(parcel, ".", NULL);
+         mcb_send_data(parcel, msg, NULL);
+         mcb_send_data(parcel, ".", NULL);
 
-         bytes_read = recv_data(parcel, buffer, sizeof(buffer));
+         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
          if (bytes_read > 0)
          {
             reply_status = atoi(buffer);
             if (reply_status >=200 && reply_status < 300)
-               advise_message(parcel, "Message was sent to ", *recipients, ".", NULL);
+               mcb_advise_message(parcel, "Message was sent to ", *recipients, ".", NULL);
             else
             {
                buffer[bytes_read] = '\0';
-               log_message(parcel,
+               mcb_log_message(parcel,
                            "The message to ",
                            *recipients,
                            " failed, saying \"",
@@ -746,7 +1119,7 @@ void send_email(MParcel *parcel,
             }
          }
          else
-            log_message(parcel, "The server failed to respond.", NULL);
+            mcb_log_message(parcel, "The server failed to respond.", NULL);
       }
    }
 

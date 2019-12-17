@@ -13,8 +13,13 @@
 
 // prototype for MParcel to be used for function pointer
 struct _comm_parcel;
+struct _pop_closure;
 
 typedef void (*ServerReady)(struct _comm_parcel *parcel);
+
+typedef int (*NextPOPMessageHeader)(struct _comm_parcel *parcel, struct _pop_closure *pop_closure );
+
+typedef int (*PopPushedMessage)(struct _pop_closure *pop_closure);
 
 typedef struct _smtp_args
 {
@@ -24,6 +29,22 @@ typedef struct _smtp_args
    int port;
    int use_tls;
 } SmtpArgs;
+
+typedef struct _pop_closure
+{
+   struct _comm_parcel *parcel;
+   int message_count;
+   int inbox_size;
+   int message_index;
+} PopClosure;
+
+
+typedef struct _message_header
+{
+   const char *tag;
+   const char *value;
+   struct _message_header *next;
+} MsgHeader;
 
 typedef struct _smtp_caps
 {
@@ -87,41 +108,53 @@ typedef struct _comm_parcel
 
    ServerReady callback_func;
 
+   PopPushedMessage pop_messenger;
+
 } MParcel;
 
 
 #include "commparcel.h"
 
-void advise_message(const MParcel *mp, ...);
-void log_message(const MParcel *mp, ...);
+int is_opening_smtp(const MParcel *parcel) { return !parcel->pop_reader; }
 
-int send_data(MParcel *mp, ...);
-int recv_data(MParcel *mp, char *buffer, int len);
-
-int digits_in_base(int value, int base);
-int itoa_buff(int value, int base, char *buffer, int buffer_len);
-
-void parse_greeting_response(MParcel *parcel, const char *buffer, int buffer_len);
+void parse_smtp_greeting_response(MParcel *parcel, const char *buffer, int buffer_len);
 
 int get_connected_socket(const char *host_url, int port);
 
 
 
-int authorize_session(MParcel *parcel);
+int authorize_smtp_session(MParcel *parcel);
 
 int greet_smtp_server(MParcel *parcel, int socket_handle);
+void greet_pop_server(MParcel *parcel);
 void start_ssl(MParcel *parcel, int socket_handle);
 
 void notify_mailer(MParcel *parcel);
 
 void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user);
-void prepare_talker(MParcel *parcel, ServerReady talker_user);
+
+/** Public functions, all should start with mcb_ */
+
+void mcb_advise_message(const MParcel *mp, ...);
+void mcb_log_message(const MParcel *mp, ...);
+
+int mcb_send_data(MParcel *mp, ...);
+int mcb_recv_data(MParcel *mp, char *buffer, int len);
+
+int mcb_digits_in_base(int value, int base);
+int mcb_itoa_buff(int value, int base, char *buffer, int buffer_len);
+
+int mcb_greet_smtp_server(MParcel *parcel);
+void mcb_quit_smtp_server(MParcel *parcel);
+int mcb_greet_pop_server(MParcel *parcel);
+
+void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user);
 
 
-void send_email(MParcel *parcel,
-                const char **recipients,
-                const char **headers,
-                const char *msg);
+void mcb_send_email(MParcel *parcel,
+                    const char **recipients,
+                    const char **headers,
+                    const char *msg);
 
 
 

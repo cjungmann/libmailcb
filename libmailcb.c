@@ -423,36 +423,6 @@ void scan_pop_messages(PopClosure *popc)
    }
 }
 
-void greet_pop_server(MParcel *parcel)
-{
-   char buffer[1024];
-   // read response from socket connection?  i don't know why,
-   // but we need to read the response before getting anything.
-   int bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-
-   mcb_send_data(parcel, "USER ", parcel->user, NULL);
-   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-   buffer[bytes_read] = '\0';
-   if (judge_pop_response(parcel, buffer, bytes_read))
-   {
-      mcb_send_data(parcel, "PASS", parcel->password, NULL);
-      bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-      buffer[bytes_read] = '\0';
-      if (judge_pop_response(parcel, buffer, bytes_read))
-      {
-         mcb_send_data(parcel, "STAT", parcel->password, NULL);
-         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-         buffer[bytes_read] = '\0';
-         if (judge_pop_response(parcel, buffer, bytes_read))
-         {
-            PopClosure popc = { parcel, 0, 0, 0 };
-            parse_pop_stat(buffer, &popc.message_count, &popc.inbox_size);
-         }
-      }
-   }
-
-}
-
 void start_ssl(MParcel *parcel, int socket_handle)
 {
    int bytes_read;
@@ -735,6 +705,8 @@ void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
 
             if (connect_outcome == 1)
             {
+               STalker *old_talker = parcel->stalker;
+
                STalker talker;
                init_ssl_talker(&talker, ssl);
                parcel->stalker = &talker;
@@ -744,6 +716,8 @@ void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
                   initialize_smtp_session(parcel);
 
                (*talker_user)(parcel);
+
+               parcel->stalker = old_talker;
             }
             else if (connect_outcome == 0)
             {
@@ -896,14 +870,17 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
       init_sock_talker(&talker, osocket);
       parcel->stalker = &talker;
 
-      bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-      fprintf(stderr, "Socket response: \"%.*s\".\n", bytes_read, buffer);
-
       if (is_opening_smtp(parcel))
       {
-         initialize_smtp_session(parcel);
+         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+         fprintf(stderr, "Socket response: \"%.*s\".\n", bytes_read, buffer);
 
-         if (parcel->caps.cap_starttls && parcel->starttls)
+         initialize_smtp_session(parcel);
+      }
+
+      if (parcel->starttls)
+      {
+         if (parcel->caps.cap_starttls)
          {
             mcb_advise_message(parcel, "Starting TLS", NULL);
 
@@ -911,20 +888,15 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
             bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
             buffer[bytes_read] = '\0';
             mcb_advise_message(parcel, buffer, NULL);
-
-            /* int reply_status = atoi(buffer); */
-
-            open_ssl(parcel, osocket, talker_user);
          }
-         else
-            // Not using SSL/TLS
-            (*talker_user)(parcel);
 
-         mcb_quit_smtp_server(parcel);
+         open_ssl(parcel, osocket, talker_user);
       }
       else
-         // running POP
+      {
+         // Not using SSL/TLS
          (*talker_user)(parcel);
+      }
 
       close(osocket);
    }
@@ -966,9 +938,36 @@ void mcb_quit_smtp_server(MParcel *parcel)
    mcb_advise_message(parcel, "SMTP server sendoff.", NULL);
 }
 
-int mcb_greet_pop_server(MParcel *parcel)
+void mcb_greet_pop_server(MParcel *parcel)
 {
-   return 0;
+   char buffer[1024];
+   int bytes_read;
+
+   // read response from socket connection?  i don't know why,
+   // but we need to read the response before getting anything.
+   /* bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer)); */
+
+   mcb_send_data(parcel, "USER ", parcel->login, NULL);
+   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+   buffer[bytes_read] = '\0';
+   
+   if (judge_pop_response(parcel, buffer, bytes_read))
+   {
+      mcb_send_data(parcel, "PASS ", parcel->password, NULL);
+      bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+      buffer[bytes_read] = '\0';
+      if (judge_pop_response(parcel, buffer, bytes_read))
+      {
+         mcb_send_data(parcel, "STAT", NULL);
+         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+         buffer[bytes_read] = '\0';
+         if (judge_pop_response(parcel, buffer, bytes_read))
+         {
+            PopClosure popc = { parcel, 0, 0, 0 };
+            parse_pop_stat(buffer, &popc.message_count, &popc.inbox_size);
+         }
+      }
+   }
 }
 
 /**
@@ -1122,6 +1121,5 @@ void mcb_send_email(MParcel *parcel,
             mcb_log_message(parcel, "The server failed to respond.", NULL);
       }
    }
-
 }
 

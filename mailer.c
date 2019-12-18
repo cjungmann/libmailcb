@@ -21,8 +21,14 @@ void server_notice_html(MParcel *parcel)
 {
    printf("Got notice from MailCB.  Sending HTML message.\n");
    mcb_send_email(parcel,
+                  // Recipients:
                   (const char*[]){"chuck@cpjj.net", "chuckjungmann@gmail.com", NULL},
-                  (const char*[]){"Subject: SMTP Server Debugging with HTML message", NULL},
+                  // Headers
+                  (const char*[]){"Subject: SMTP Server Debugging with HTML message",
+                        "MIME-Version: 1.0",
+                        "Content-Type: text/html; charset=\"UTF-8\"",
+                        NULL},
+                  // Message body
                   "<html>\n"
                   "<body>\n"
                   "<p>\n"
@@ -55,14 +61,6 @@ void begin_smtp_conversation(MParcel *parcel)
    }
 }
 
-void begin_pop_conversation(MParcel *parcel)
-{
-   if (mcb_greet_pop_server(parcel))
-   {
-      mcb_advise_message(parcel, "Greeted the pop server.  Gonna go to town, now.", NULL);
-   }
-}
-
 void talker_user(MParcel *parcel)
 {
    mcb_advise_message(parcel, "Entered the talker_user function.", NULL);
@@ -70,7 +68,7 @@ void talker_user(MParcel *parcel)
    if (is_opening_smtp(parcel))
       begin_smtp_conversation(parcel);
    else
-      begin_pop_conversation(parcel);
+      mcb_greet_pop_server(parcel);
 }
 
 void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
@@ -127,7 +125,7 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
                    && 0 == strcmp(line->value, "pop"))
                {
                   parcel->pop_reader = 1;
-                  parcel->callback_func = begin_pop_conversation;
+                  parcel->callback_func = mcb_greet_pop_server;
                   goto next_line;
                }
 
@@ -155,6 +153,24 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
 
    /*    close(osocket); */
    /* } */
+}
+
+void show_usage(void)
+{
+   const char* text = 
+      "-a account to use\n"
+      "-c config file path\n"
+      "-h host url\n"
+      "-l login name\n"
+      "-p port number\n"
+      "-r POP3 reader\n"
+      "-q quiet, supress error messages\n"
+      "-t use TLS encryption\n"
+      "-u user name\n"
+      "-v generate verbose output\n"
+      "-w password\n";
+
+   printf("%s\n", text);
 }
 
 int main(int argc, const char** argv)
@@ -218,7 +234,7 @@ int main(int argc, const char** argv)
                   break;
                case 'r':  // POP3 reader
                   mparcel.pop_reader = 1;
-                  mparcel.callback_func = begin_pop_conversation;
+                  mparcel.callback_func = mcb_greet_pop_server;
                   break;
                case 'q':  // quiet, suppress error messages
                   mparcel.quiet = 1;
@@ -243,6 +259,10 @@ int main(int argc, const char** argv)
                      goto continue_next_arg;
                   }
                default:
+                  printf("'%c' is not a valid argument.\n", *str);
+               case '?':  // show help
+                  show_usage();
+                  goto abort_program;
                   break;
             }
          }
@@ -267,6 +287,7 @@ int main(int argc, const char** argv)
       begin_after_read_config_attempt(NULL, (void*)&mparcel);
    }
 
+  abort_program:
    return 0;
 }
 

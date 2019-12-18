@@ -126,7 +126,6 @@ int get_connected_socket(const char *host_url, int port);
 int authorize_smtp_session(MParcel *parcel);
 
 int greet_smtp_server(MParcel *parcel, int socket_handle);
-void greet_pop_server(MParcel *parcel);
 void start_ssl(MParcel *parcel, int socket_handle);
 
 void notify_mailer(MParcel *parcel);
@@ -146,7 +145,7 @@ int mcb_itoa_buff(int value, int base, char *buffer, int buffer_len);
 
 int mcb_greet_smtp_server(MParcel *parcel);
 void mcb_quit_smtp_server(MParcel *parcel);
-int mcb_greet_pop_server(MParcel *parcel);
+void mcb_greet_pop_server(MParcel *parcel);
 
 void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user);
 

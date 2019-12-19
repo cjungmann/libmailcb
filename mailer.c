@@ -127,10 +127,10 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
                if (update_if_needed("host", line, &parcel->host_url, parcel))
                   goto next_line;
 
-               if (update_if_needed("from", line, &parcel->login, parcel))
+               if (update_if_needed("user", line, &parcel->login, parcel))
                   goto next_line;
 
-               if (update_if_needed("user", line, &parcel->user, parcel))
+               if (update_if_needed("from", line, &parcel->from, parcel))
                   goto next_line;
 
                if (update_if_needed("password", line, &parcel->password, parcel))
@@ -177,13 +177,13 @@ void show_usage(void)
    const char* text = 
       "-a account to use\n"
       "-c config file path\n"
+      "-f from email address\n"
       "-h host url\n"
       "-l login name\n"
       "-p port number\n"
       "-r POP3 reader\n"
       "-q quiet, supress error messages\n"
       "-t use TLS encryption\n"
-      "-u user name\n"
       "-v generate verbose output\n"
       "-w password\n";
 
@@ -228,6 +228,13 @@ int main(int argc, const char** argv)
                      goto continue_next_arg;
                   }
                   break;
+               case 'f':  // from
+                  if (cur_arg + 1 < end_arg)
+                  {
+                     mparcel.from = *++cur_arg;
+                     goto continue_next_arg;
+                  }
+                  break;
                case 'h':  // host
                   if (cur_arg + 1 < end_arg)
                   {
@@ -259,13 +266,6 @@ int main(int argc, const char** argv)
                   break;
                case 't':   // tls
                   mparcel.starttls = 1;
-                  break;
-               case 'u':  // user
-                  if (cur_arg + 1 < end_arg)
-                  {
-                     mparcel.user = *++cur_arg;
-                     goto continue_next_arg;
-                  }
                   break;
                case 'v':  // verbose messages
                   mparcel.verbose = 1;

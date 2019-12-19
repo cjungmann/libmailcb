@@ -1,6 +1,8 @@
 #include "mailcb.h"
 #include <ctype.h>   // for isspace()
 
+#include "commparcel.h"
+
 CapString authstrings[] = {
    {"PLAIN",        5, set_auth_plain},
    {"LOGIN",        5, set_auth_login},

@@ -40,6 +40,12 @@ void server_notice_html(MParcel *parcel)
                   "</html>");
 }
 
+int pop_message_receiver(PopClosure *popc, const HeaderField *fields)
+{
+   printf("Got a message!\n");
+   return 1;
+}
+
 void server_notice_text(MParcel *parcel)
 {
    printf("Got notice from MailCB.\n");
@@ -126,6 +132,7 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
                {
                   parcel->pop_reader = 1;
                   parcel->callback_func = mcb_greet_pop_server;
+                  parcel->pop_message_receiver = pop_message_receiver;
                   goto next_line;
                }
 
@@ -139,20 +146,6 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
    }
 
    mcb_prepare_talker(parcel, talker_user);
-
-
-   /* int osocket = get_connected_socket(parcel->host_url, parcel->host_port); */
-   /* if (osocket) */
-   /* { */
-   /*    mcb_advise_message(parcel, "Socket opened, about to begin conversation.", NULL); */
-
-   /*    if (parcel->pop_reader) */
-   /*       greet_pop_server(parcel); */
-   /*    else */
-   /*       greet_smtp_server(parcel, osocket); */
-
-   /*    close(osocket); */
-   /* } */
 }
 
 void show_usage(void)
@@ -235,6 +228,7 @@ int main(int argc, const char** argv)
                case 'r':  // POP3 reader
                   mparcel.pop_reader = 1;
                   mparcel.callback_func = mcb_greet_pop_server;
+                  mparcel.pop_message_receiver = pop_message_receiver;
                   break;
                case 'q':  // quiet, suppress error messages
                   mparcel.quiet = 1;

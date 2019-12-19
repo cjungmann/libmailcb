@@ -183,55 +183,6 @@ int get_connected_socket(const char *host_url, int port)
    return open_socket;
 }
 
-int greet_smtp_server(MParcel *parcel, int socket_handle)
-{
-   int reply_status;
-   int bytes_read;
-   char buffer[1024];
-
-   const char *host = parcel->host_url;
-
-   STalker stalker;
-   STalker *pstk = &stalker;
-   init_sock_talker(pstk, socket_handle);
-
-   // mparcel needs to know how to talk to the server:
-   parcel->stalker = &stalker;
-
-   // read response from socket connection?  i don't know why,
-   // but we need to read the response before getting anything.
-   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-
-   mcb_advise_message(parcel, "about to greet server.", NULL);
-
-   mcb_send_data(parcel, "EHLO ", host, NULL);
-   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-   parse_smtp_greeting_response(parcel, buffer, bytes_read);
-
-   // if the profile asks for starttls and the server offers starttls, do it.
-   if (parcel->starttls != 0 && get_starttls(parcel))
-   {
-      mcb_send_data(parcel, "STARTTLS", NULL);
-      bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-      reply_status = atoi(buffer);
-
-      if (reply_status >= 200 && reply_status < 300)
-         start_ssl(parcel, socket_handle);
-      else if (authorize_smtp_session(parcel))
-      {
-         // Send execution back to the caller:
-         notify_mailer(parcel);
-      }
-   }
-   else
-   {
-      printf("expected starttls in :\n[44;1m%.*s[m\n", bytes_read, buffer);
-      mcb_advise_message(parcel, "proceeding without starttls.", NULL);
-   }
-
-   return 0;
-}
-
 int judge_pop_response(MParcel *parcel, const char *buffer, int len)
 {
    if (buffer[0] == '+')
@@ -266,160 +217,6 @@ void parse_pop_stat(const char *buffer, int *count, int *inbox_size)
       *inbox_size *= 10;
       *inbox_size += *ptr - '0';
       ++ptr;
-   }
-}
-
-void scan_pop_messages(PopClosure *popc)
-{
-   size_t bytes_received;
-   char buffer[1024];
-   char *bptr = buffer;
-   char *cursor;
-   char *bend = bptr + sizeof(buffer);
-
-   MsgHeader *root = NULL, *tail = NULL;
-
-   const char *tag;
-   int tag_len;
-   const char *value;
-   int value_len;
-
-   if (popc->message_index < popc->message_count)
-   {
-      mcb_itoa_buff(popc->message_index+1, 10, buffer, sizeof(buffer));
-      mcb_send_data(popc->parcel, "TOP ", buffer, " 0", NULL);
-
-      // Retrieve one-less-than buffer length to leave room for terminating \0:
-      bytes_received = mcb_recv_data(popc->parcel, buffer, sizeof(buffer-1));
-      // Then terminate the string in the buffer.
-      buffer[bytes_received] = '\0';
-
-      if (bytes_received > 0)
-      {
-         cursor = bptr = buffer;
-         if (0 == strncmp(bptr, "+OK ", 4))
-         {
-            cursor += 4;
-
-            tag = value = NULL;
-            tag_len = value_len = 0;
-
-            // Move ptr to start of next line:
-            while (++cursor < bend && *cursor != '\r')
-               ;
-
-            if (*(1+cursor) == '\n')
-            {
-               ++cursor;
-
-               // if we found the next line, move the ptr to save the position:
-               bptr = cursor;
-            }
-
-            // Process, line-by-line, until content end of current buffer.
-            // Important to ensure we're at the beginning of a line at loop top.
-
-            // While still within the current retrieved buffer:
-            while (cursor < bend)
-            {
-               // Process the current line
-
-               // Check for continuing value
-               if (*cursor == ' ')
-               {
-                  // Move ptr to start of next line:
-                  while (++cursor < bend)
-                  {
-                     if (*cursor == '\r' && *(cursor+1) == '\n')
-                     {
-                        ++cursor;
-                        break;
-                     }
-                  }
-
-                  if (*cursor == '\n')
-                     continue;
-                  // end of processing current line as a header value
-               }
-               else
-               {
-                  // if it's not a continuation, it's a new tag or the
-                  // end of the headers.  In either case, save the accumulated
-                  // value to a new header chain link, then proceed according
-                  // the the character following the newline.
-
-                  value = bptr;
-                  value_len = cursor - bptr;
-
-                  MsgHeader *newmh = (MsgHeader*)alloca(sizeof(MsgHeader));
-                  memset(newmh, 0, sizeof(MsgHeader));
-
-                  char *work = (char*)alloca(tag_len+1);
-                  memcpy(work, tag, tag_len);
-                  work[tag_len] = '\0';
-                  newmh->tag = work;
-
-                  work = (char*)alloca(value_len + 1);
-                  // Let's not copy the indenting:
-
-                  if (!root)
-                     root = tail = newmh;
-                  else
-                  {
-                     tail->next = newmh;
-                     tail = newmh;
-                  }
-
-                  // Now decide what to do next:
-                  if (0 == strncmp(cursor, "\r\n.", 3))
-                     goto end_of_message_header;
-
-                  // If we're still here, it's a new tag.  Read accordingly:
-                  // reset variables for next tag and value:
-                  tag = value = NULL;
-                  tag_len = value_len = 0;
-                  bptr = cursor;
-
-                  // get to end of tag
-                  while (++cursor < bend)
-                  {
-                     if (isspace(*cursor) || *cursor!=':')
-                     {
-                        tag = bptr;
-                        tag_len = cursor - bptr;
-                        break;
-                     }
-                  }
-
-                  // Move to beginning of value
-                  while (++cursor < bend)
-                  {
-                     if (!(isspace(*cursor) || *cursor==':'))
-                     {
-                        bptr = cursor;
-                        break;
-                     }
-                  }
-
-                  // Find the end of the line before starting at the top of the buffer loop:
-                  while (++cursor < bend)
-                  {
-                     if (*cursor=='\r' && *(cursor+1)=='\n')
-                        break;
-                  };
-               }  // end of if (*cursor == ' ')
-
-
-               }
-            } // When this loop exits, we need to refill the buffer or quit
-
-
-         }
-
-        end_of_message_header:
-         ;
-
-      bptr = buffer;
    }
 }
 
@@ -746,6 +543,222 @@ void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
       mcb_log_message(parcel, "Failed to find SSL client method.", NULL);
 }
 
+int parse_header_field(const char *start,
+                       const char *end_of_buffer,
+                       const char **tag,
+                       int *tag_len,
+                       const char **value,
+                       int *value_len)
+{
+   *tag = *value = NULL;
+   *tag_len = *value_len = 0;
+
+   const char *end_of_field = NULL;
+   const char *end_of_consideration = NULL;
+
+   const char *ptr = start;
+
+   // Find the end-of-field:
+   while (ptr < end_of_buffer)
+   {
+      if (0 == strncmp(ptr,"\r\n",2))
+      {
+         // End of field if \r\n and a non-space character
+         // introducing the next header field
+         if (!isspace(*(ptr+2)))
+         {
+            end_of_field = ptr;
+
+            // point to beginning of next line:
+            end_of_consideration = ptr + 2;
+            break;
+         }
+         else if (0 == strncmp(&ptr[2], "\r\n", 2))
+         {
+            end_of_field = ptr;
+
+            // Point to end of buffer to end fields processing
+            end_of_consideration = end_of_buffer;
+            break;
+         }
+      }
+
+      ++ptr;
+   }
+
+   // If can't find end-of-field, return character count to end-of-buffer: 
+   if (! end_of_field)
+      return (end_of_buffer - start);
+
+   *tag = start;
+
+   // If +OK, set tag_len but not value or value_len to
+   // help the calling function move to the next line
+   if (0 == strncmp(ptr, "+OK", 3))
+   {
+      *tag_len = end_of_field - *tag;
+   }
+   else
+   {
+      // ptr at end-of-field, return to beginning of line for char comparison:
+      ptr = *tag;
+
+      // Find the colon, which marks the end of the tag
+      while (ptr < end_of_field && *ptr != ':')
+         ++ptr;
+
+      *tag_len = ptr - *tag;
+
+      if (*ptr == ':')
+      {
+         // Trim spaces to find start of value.
+         // Note different "while" form because the starting
+         // colon is assured and is not a space, so we must
+         // increment the pointer before checking if space.
+         while (++ptr < end_of_field && isspace(*ptr))
+            ;
+
+         *value = ptr;
+
+         *value_len = end_of_field - ptr;
+      }
+   }
+
+   return end_of_consideration - start;
+}
+
+/**
+ * @brief This function assumes that the size of the target is the
+ *        same as the source.  The target may end up shorter than
+ *        source if the source is a multi-line value, and the \r\n\s+
+ *        characters will be replaced with a single \t to aid in
+ *        interpreting the value (split on tabs for sublines).
+ */       
+void trim_copy_value(char *target, const char *source, int source_len)
+{
+   char *ptr_t = target;
+   const char *ptr_s = source;
+   const char *end_source = source + source_len;
+
+   while (ptr_s < end_source)
+   {
+      // Compress \r\n\s+ to \t
+      if (*ptr_s == '\r')
+      {
+         *ptr_t = '\t';
+         ++ptr_t;
+
+         while (isspace(*++ptr_s))
+            ;
+      }
+      else
+         *ptr_t++ = *ptr_s++;
+   }
+}
+
+
+
+/**
+ * @brief Retrieves the headers, parsing them into discrete name/value pairs and sending to callback.
+ */
+int send_pop_message_header(PopClosure *popc)
+{
+   char buffer[1024];
+   int bytes_read;
+
+   HeaderField *head = NULL, *tail = NULL, *cur;
+
+   const char *name, *value, *ptr, *line;
+   int name_len, value_len;
+
+   const char *end_of_buffer;
+   char *work;
+
+   int bytes_to_advance;
+
+   // Borrow buffer to convert the integer to a string for the TOP command
+   mcb_itoa_buff(popc->message_index+1, 10, buffer, sizeof(buffer));
+   mcb_send_data(popc->parcel, "TOP ", buffer, " 0", NULL);
+
+   if ((bytes_read = mcb_recv_data(popc->parcel, buffer, sizeof(buffer))) > 0)
+   {
+      end_of_buffer = &buffer[bytes_read];
+      line = ptr = buffer;
+
+      while (line < end_of_buffer)
+      {
+         if (*line == '-')
+         {
+            mcb_log_message(popc->parcel, "Unexpected failure for TOP: \"", buffer, "\"", NULL);
+            goto abort_processing;
+         }
+         else
+         {
+            bytes_to_advance = parse_header_field(line,
+                                                  end_of_buffer,
+                                                  &name,
+                                                  &name_len,
+                                                  &value,
+                                                  &value_len);
+
+            if (name)
+            {
+               if (value)
+               {
+                  cur = (HeaderField*)alloca(sizeof(HeaderField));
+                  memset(cur, 0, sizeof(HeaderField));
+
+                  work = (char*)alloca(name_len+1);
+                  memcpy(work, name, name_len);
+                  work[name_len] = '\0';
+
+                  cur->name = work;
+
+                  work = (char*)alloca(value_len);
+                  trim_copy_value(work, value, value_len);
+                  cur->value = work;
+
+                  if (tail)
+                  {
+                     tail->next = cur;
+                     tail = cur;
+                  }
+                  else
+                     head = tail = cur;
+               }
+               else if (0 == strncmp(name, "+OK", 3))
+               {
+                  ; // ignore status line
+               }
+               else  // Incomplete field, shift and continue reading
+               {
+                  memmove(buffer, line, bytes_to_advance);
+                  bytes_read = mcb_recv_data(popc->parcel,
+                                             &buffer[bytes_to_advance],
+                                             sizeof(buffer)-bytes_to_advance);
+
+                  end_of_buffer = &buffer[bytes_read + bytes_to_advance];
+                  line = ptr = buffer;
+
+                  // Bypass update
+                  continue;
+               }
+            }
+
+            line += bytes_to_advance;
+         }
+      } // while (line < end_of_buffer)
+   }
+
+   assert(popc->parcel->pop_message_receiver);
+   return (*popc->parcel->pop_message_receiver)(popc, head);
+
+  abort_processing:
+   return 0;
+}
+
+
+
 /**
  * @brief Writes arguments (const char*s following MParcel*, terminated by NULL)
  *        only if MParcel::verbose is true.
@@ -945,7 +958,8 @@ void mcb_greet_pop_server(MParcel *parcel)
 
    // read response from socket connection?  i don't know why,
    // but we need to read the response before getting anything.
-   /* bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer)); */
+   // Usually, this will be somethiing like "+OK Dovecot ready."
+   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
 
    mcb_send_data(parcel, "USER ", parcel->login, NULL);
    bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
@@ -965,6 +979,19 @@ void mcb_greet_pop_server(MParcel *parcel)
          {
             PopClosure popc = { parcel, 0, 0, 0 };
             parse_pop_stat(buffer, &popc.message_count, &popc.inbox_size);
+
+            while (popc.message_index < popc.message_count)
+            {
+               mcb_advise_message(parcel, "Processing an email.", NULL);
+               if (send_pop_message_header(&popc))
+                  ++popc.message_index;
+               else
+                  break;
+            }
+
+            printf("POP server has %d messages, for a total of %d total bytes.\n",
+                   popc.message_count,
+                   popc.inbox_size);
          }
       }
    }
@@ -983,7 +1010,6 @@ int send_envelope(MParcel *parcel, const char **recipients)
 
    char buffer[1024];
    const char **ptr = recipients;
-
    int bytes_read;
    int recipients_accepted = 0;
    int reply_status;

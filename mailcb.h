@@ -15,11 +15,23 @@
 struct _comm_parcel;
 struct _pop_closure;
 
+typedef struct _header_field
+{
+   const char *name;
+   const char *value;
+   struct _header_field *next;
+} HeaderField;
+
 typedef void (*ServerReady)(struct _comm_parcel *parcel);
 
 typedef int (*NextPOPMessageHeader)(struct _comm_parcel *parcel, struct _pop_closure *pop_closure );
 
-typedef int (*PopPushedMessage)(struct _pop_closure *pop_closure);
+/**
+ * @brief The POP message handler will call this function for every message on the server.
+ *
+ * @return 1 to continue receiving messages, 0 to signal library to stop sending messages.
+ */
+typedef int (*PopPushedMessage)(struct _pop_closure *pop_closure, const HeaderField *fields);
 
 typedef struct _smtp_args
 {
@@ -38,13 +50,6 @@ typedef struct _pop_closure
    int message_index;
 } PopClosure;
 
-
-typedef struct _message_header
-{
-   const char *tag;
-   const char *value;
-   struct _message_header *next;
-} MsgHeader;
 
 typedef struct _smtp_caps
 {
@@ -108,7 +113,7 @@ typedef struct _comm_parcel
 
    ServerReady callback_func;
 
-   PopPushedMessage pop_messenger;
+   PopPushedMessage pop_message_receiver;
 
 } MParcel;
 
@@ -125,12 +130,19 @@ int get_connected_socket(const char *host_url, int port);
 
 int authorize_smtp_session(MParcel *parcel);
 
-int greet_smtp_server(MParcel *parcel, int socket_handle);
-void start_ssl(MParcel *parcel, int socket_handle);
-
 void notify_mailer(MParcel *parcel);
 
 void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user);
+
+int parse_header_field(const char *start,
+                       const char *end_of_buffer,
+                       const char **tag,
+                       int *tag_len,
+                       const char **value,
+                       int *value_len);
+
+void trim_copy_value(char *target, const char *source, int source_len);
+int send_pop_message_header(PopClosure *popc);
 
 /** Public functions, all should start with mcb_ */
 

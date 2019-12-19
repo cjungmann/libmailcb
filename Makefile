@@ -9,7 +9,7 @@ CC = cc
 
 all : libmailcb.so mailer
 
-libmailcb.so : libmailcb.c mailcb.h mailcb_internal.c socktalk.o socktalk.h commparcel.c
+libmailcb.so : libmailcb.c mailcb.h mailcb_internal.h socktalk.o socktalk.h commparcel.c
 	$(CC) $(LIB_CFLAGS) -o libmailcb.so socktalk.o libmailcb.c -lssl -lcrypto -lcode64
 
 socktalk.o : socktalk.c socktalk.h

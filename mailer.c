@@ -42,7 +42,31 @@ void server_notice_html(MParcel *parcel)
 
 int pop_message_receiver(PopClosure *popc, const HeaderField *fields)
 {
-   printf("Got a message!\n");
+
+   const HeaderField *ptr;
+   int str_len,  max_name_len = 0;
+
+   ptr = fields;
+   while (ptr)
+   {
+      str_len = strlen(ptr->name);
+      if (str_len > max_name_len)
+         max_name_len = str_len;
+
+      ptr = ptr->next;
+   }
+
+
+
+   printf("\n[34;1m");
+   printf("Max name length is %d.\n", max_name_len);
+   ptr = fields;
+   while (ptr)
+   {
+      printf("%*s: %s\n", max_name_len, ptr->name, ptr->value);
+      ptr = ptr->next;
+   }
+   printf("[m\n");
    return 1;
 }
 

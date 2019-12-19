@@ -13,6 +13,7 @@
 #include "mailcb.h"
 
 #include "commparcel.c"
+#include "mailcb_internal.h"
 
 CapString capstrings[] = {
    /* {"AUTH",                 4, set_auth}, */
@@ -29,6 +30,9 @@ CapString capstrings[] = {
 int capstrings_count = sizeof(capstrings) / sizeof(CapString);
 const CapString *capstring_end = &capstrings[sizeof(capstrings) / sizeof(CapString)];
 
+/**
+ * @brief Creates a readable message from SSL_get_error() for logging an error.
+ */
 void log_ssl_error(MParcel *parcel, const SSL *ssl, int ret)
 {
    int error = SSL_get_error(ssl, ret);
@@ -79,57 +83,13 @@ void log_ssl_error(MParcel *parcel, const SSL *ssl, int ret)
    }
 }
 
-void parse_capability_response(MParcel *parcel, const char *line, int line_len)
-{
-   const CapString *ptr = capstrings;
-   while (ptr < capstring_end)
-   {
-      if (0 == strncmp(line, ptr->str, ptr->len))
-         (*ptr->set_cap)(parcel, line, ptr->len);
-
-      ++ptr;
-   }
-}
-
-void parse_smtp_greeting_response(MParcel *parcel, const char *buffer, int buffer_len)
-{
-   // walk_status_reply variables:
-   int status;
-   const char *line;
-   int line_len;
-   int advance_chars;
-
-   // progress variables
-   const char *ptr = buffer;
-   const char *end = buffer + buffer_len;
-
-   clear_smtp_caps(parcel);
-
-   while (ptr < end)
-   {
-      advance_chars = walk_status_reply(ptr, &status, &line, &line_len);
-      switch(advance_chars)
-      {
-         case -1:
-            fprintf(parcel->logfile, "Error processing replys from \"%s\"\n", buffer);
-         case 0:
-            ptr = end;  // set ptr to break loop
-            break;
-         default:
-            if (status == 250)
-            {
-               if (0 == strncmp(line, "AUTH", 4))
-                  set_auth(parcel, line, line_len);
-               else
-                  parse_capability_response(parcel, line, line_len);
-            }
-
-            ptr += advance_chars;
-            break;
-      }
-   }
-}
-
+/**
+ * @brief Open a socket to the given host on the specified port.
+ *
+ * Unlike other functions in this library, this function **does not**
+ * clean up after itself. A successfully calling this function must
+ * explicitely close the socket handle.
+ */
 int get_connected_socket(const char *host_url, int port)
 {
    struct addrinfo hints;
@@ -183,281 +143,21 @@ int get_connected_socket(const char *host_url, int port)
    return open_socket;
 }
 
-int judge_pop_response(MParcel *parcel, const char *buffer, int len)
-{
-   if (buffer[0] == '+')
-      return 1;
-   else
-      mcb_log_message(parcel, "POP server error: ", &buffer[1], NULL);
-
-   return 0;
-}
-
-void parse_pop_stat(const char *buffer, int *count, int *inbox_size)
-{
-   const char *ptr = buffer;
-   *count = 0;
-   *inbox_size = 0;
-
-   while (!isdigit(*ptr))
-      ++ptr;
-
-   while (isdigit(*ptr))
-   {
-      *count *= 10;
-      *count += *ptr - '0';
-      ++ptr;
-   }
-
-   while (!isdigit(*ptr))
-      ++ptr;
-
-   while (isdigit(*ptr))
-   {
-      *inbox_size *= 10;
-      *inbox_size += *ptr - '0';
-      ++ptr;
-   }
-}
-
-void start_ssl(MParcel *parcel, int socket_handle)
-{
-   int bytes_read;
-   STalker *pstk = parcel->stalker;
-   const char *host = parcel->host_url;
-
-   char buffer[1024];
-
-   const SSL_METHOD *method;
-   SSL_CTX *context;
-   SSL *ssl;
-   int connect_outcome;
-
-   OpenSSL_add_all_algorithms();
-   /* err_load_bio_strings(); */
-   ERR_load_crypto_strings();
-   SSL_load_error_strings();
-
-   /* openssl_config(null); */
-
-   SSL_library_init();
-
-   method = SSLv23_client_method();
-   if (method)
-   {
-      context = SSL_CTX_new(method);
-
-      if (context)
-      {
-         // following two not included in most recent example code i found.
-         // it may be appropriate to uncomment these lines as i learn more.
-         /* ssl_ctx_set_verify(context, ssl_verify_peer, null); */
-         /* ssl_ctx_set_verify_depth(context, 4); */
-
-         // we could set some flags, but i'm not doing it until i need to and i understand 'em
-         /* const long ctx_flags = ssl_op_no_sslv2 | ssl_op_no_sslv3 | ssl_op_no_compression; */
-         /* ssl_ctx_set_options(context, ctx_flags); */
-         SSL_CTX_set_options(context, SSL_OP_NO_SSLv2);
-
-         ssl = SSL_new(context);
-         if (ssl)
-         {
-            SSL_set_fd(ssl, socket_handle);
-
-            connect_outcome = SSL_connect(ssl);
-
-            if (connect_outcome == 1)
-            {
-               STalker talker, *old_talker = parcel->stalker;
-               init_ssl_talker(&talker, ssl);
-
-               parcel->stalker = pstk = &talker;
-
-               mcb_advise_message(parcel, "About to resend EHLO to get authorization information.", NULL);
-               mcb_send_data(parcel, "EHLO ", host, NULL);
-               bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-               parse_smtp_greeting_response(parcel, buffer, bytes_read);
-
-               mcb_advise_message(parcel, "ssl protocol initialized.", NULL);
-
-               if (authorize_smtp_session(parcel))
-               {
-                  // Send execution back to the caller:
-                  notify_mailer(parcel);
-               }
-
-               // Restore previous STalker for when the SSL session is abandoned.
-               // I would have put it after SSL_free(), but that reverses the SSL_new()
-               // allocation rather than the connection.  This may be the wrong
-               // thing, but it seems right now.
-               parcel->stalker = old_talker;
-            }
-            else if (connect_outcome == 0)
-               // failed with controlled shutdown
-               mcb_log_message(parcel, "ssl connection failed and was cleaned up.", NULL);
-            else
-            {
-               mcb_log_message(parcel, "ssl connection failed and aborted.", NULL);
-               /* present_ssl_error(ssl_get_error(ssl, connect_outcome)); */
-               ERR_print_errors_fp(parcel->logfile);
-            }
-
-            SSL_free(ssl);
-         }
-         else  // failed to get an ssl
-         {
-            mcb_log_message(parcel, "failed to get an ssl object.", NULL);
-            ERR_print_errors_fp(parcel->logfile);
-         }
-
-         SSL_CTX_free(context);
-      }
-      else // failed to get a context
-      {
-         mcb_log_message(parcel, "Failed to get an SSL context.", NULL);
-         ERR_print_errors_fp(parcel->logfile);
-      }
-   }
-   else
-      mcb_log_message(parcel, "Failed to get an SSL method.", NULL);
-}
-
-void message_auth_prompts(MParcel *parcel, const char *buffer, int len)
-{
-   printf("[34;1m%s[m with %d characters\n", buffer, len);
-
-   int declen = c64_decode_chars_needed(len-4);
-   char *tbuff = (char*)alloca(declen+1);
-
-   c64_decode_to_buffer(&buffer[4], tbuff, declen+1);
-   tbuff[declen] = '\0';
-
-   mcb_advise_message(parcel, "Server responds: \"", tbuff, "\"", NULL);
-}
-
-void initialize_smtp_session(MParcel *parcel)
-{
-   char buffer[1024];
-   int bytes_read;
-
-   mcb_send_data(parcel, "EHLO ", parcel->host_url, NULL);
-   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-   parse_smtp_greeting_response(parcel, buffer, bytes_read);
-}
-
-int authorize_smtp_session(MParcel *parcel)
-{
-   char buffer[1024];
-   int bytes_received;
-   int reply_status;
-
-   const char *login = parcel->login;
-   const char *password = parcel->password;
-
-   int use_plain = parcel->caps.cap_auth_plain;
-   int use_login = parcel->caps.cap_auth_login;
-
-   const char *auth_type = (use_plain?"PLAIN":(use_login?"LOGIN":NULL));
-
-   // PLAIN accepts concatenated \0login\0password string (both prefixed with NULL character).
-   // LOGIN accepts separate login and password submissions
-
-
-   if (auth_type)
-   {
-      /* mcb_send_data(parcel, "AUTH ", auth_type, NULL); */
-      mcb_send_data(parcel, "AUTH LOGIN", NULL);
-      bytes_received = mcb_recv_data(parcel, buffer, sizeof(buffer));
-      buffer[bytes_received] = '\0';
-      message_auth_prompts(parcel, buffer, bytes_received);
-      reply_status = atoi(buffer);
-      if (reply_status >= 300 && reply_status < 400)
-      {
-         c64_encode_to_buffer(login, strlen(login), (uint32_t*)&buffer, sizeof(buffer));
-         mcb_advise_message(parcel,
-                        "Sending user name, ",
-                        login,
-                        ", encoded as ",
-                        buffer,
-                        ", to the server.",
-                        NULL);
-
-         mcb_send_data(parcel, buffer, NULL);
-         bytes_received = mcb_recv_data(parcel, buffer, sizeof(buffer));
-         buffer[bytes_received] = '\0';
-         message_auth_prompts(parcel, buffer, bytes_received);
-         reply_status = atoi(buffer);
-         if (reply_status >= 300 && reply_status < 400)
-         {
-            c64_encode_to_buffer(password, strlen(password), (uint32_t*)&buffer, sizeof(buffer));
-            mcb_advise_message(parcel,
-                           "Sending password, ",
-                           password,
-                           ", encoded as ",
-                           buffer,
-                           ", to the server.",
-                           NULL);
-
-            mcb_send_data(parcel, buffer, NULL);
-            bytes_received = mcb_recv_data(parcel, buffer, sizeof(buffer));
-            buffer[bytes_received] = '\0';
-            reply_status = atoi(buffer);
-            if (reply_status >= 200 && reply_status < 300)
-               return 1;
-            else
-               mcb_log_message(parcel,
-                           "For login name, ",
-                           login,
-                           ", the password, ",
-                           password,
-                           ", was not accepted by the server.",
-                           " (",
-                           buffer,
-                           ")",
-                           NULL);
-
-
-         }
-         else
-            mcb_log_message(parcel,
-                        "Login name, ",
-                        login,
-                        ", not accepted by the server.",
-                        " (",
-                        buffer,
-                        ")",
-                        NULL);
-      }
-      else
-         mcb_log_message(parcel,
-                     "Authorization request failed with \"",
-                     buffer,
-                     "\"",
-                     NULL);
-   }
-   else
-      mcb_log_message(parcel, "mailcb only supports PLAIN and LOGIN authorization.", NULL);
-
-
-   return 0;
-}
-
-void notify_mailer(MParcel *parcel)
-{
-   char buffer[512];
-
-   if (parcel->callback_func)
-      (*parcel->callback_func)(parcel);
-   else
-      mcb_log_message(parcel, "No callback function provided to continue emailing.", NULL);
-
-   // Politely terminate connection with server
-   mcb_send_data(parcel, "QUIT", NULL);
-   mcb_recv_data(parcel, buffer, sizeof(buffer));
-
-   mcb_advise_message(parcel, "SMTP server sendoff.", NULL);
-}
-
+/**
+ * @brief Gets a SSL handle for an open socket, calling the MParcel::callback_func
+ *        function pointer when it's SSL handle is working.
+ *
+ * This function automatically resends the EHLO request to update
+ * the MParcel::SmtpCaps structure.  That ensures that the
+ * talker_user function gets an accurate indication of the
+ * server's capabilities.
+ *
+ * We have to reaquire the caps because one server, I think it
+ * was mail.privateemail.com wouldn't allow STARTTLS when the
+ * STARTTLS capability hadn't been advertised, so that meant
+ * I couldn't simply check the use_tls flag and then call for
+ * STARTTLS.  GMail seems to work similarly, though not identically.
+ */
 void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
 {
    const SSL_METHOD *method;
@@ -509,7 +209,7 @@ void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
                parcel->stalker = &talker;
 
                // Gmail advertises different capabilities after SSL initialization:
-               if (is_opening_smtp(parcel))
+               if (mcb_is_opening_smtp(parcel))
                   initialize_smtp_session(parcel);
 
                (*talker_user)(parcel);
@@ -543,6 +243,240 @@ void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
       mcb_log_message(parcel, "Failed to find SSL client method.", NULL);
 }
 
+/**
+ * @brief Send EHLO and process the response to the MParcel Caps member.
+ */
+void initialize_smtp_session(MParcel *parcel)
+{
+   char buffer[1024];
+   int bytes_read;
+
+   mcb_send_data(parcel, "EHLO ", parcel->host_url, NULL);
+   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+   parse_smtp_greeting_response(parcel, buffer, bytes_read);
+}
+
+/**
+ * @brief Used by parse_smtp_greeting_response() to interpret the EHLO response.
+ */
+void parse_smtp_capability_response(MParcel *parcel, const char *line, int line_len)
+{
+   const CapString *ptr = capstrings;
+   while (ptr < capstring_end)
+   {
+      if (0 == strncmp(line, ptr->str, ptr->len))
+         (*ptr->set_cap)(parcel, line, ptr->len);
+
+      ++ptr;
+   }
+}
+
+/**
+ * @brief Set the MParcel::SmtpCaps with the SMTP server response.
+ *
+ * The buffer should contain the response from the SMTP after sending
+ * an EHLO <host name> request.
+ */
+void parse_smtp_greeting_response(MParcel *parcel, const char *buffer, int buffer_len)
+{
+   // walk_status_reply variables:
+   int status;
+   const char *line;
+   int line_len;
+   int advance_chars;
+
+   // progress variables
+   const char *ptr = buffer;
+   const char *end = buffer + buffer_len;
+
+   clear_smtp_caps(parcel);
+
+   while (ptr < end)
+   {
+      advance_chars = walk_status_reply(ptr, &status, &line, &line_len);
+      switch(advance_chars)
+      {
+         case -1:
+            fprintf(parcel->logfile, "Error processing replys from \"%s\"\n", buffer);
+         case 0:
+            ptr = end;  // set ptr to break loop
+            break;
+         default:
+            if (status == 250)
+            {
+               if (0 == strncmp(line, "AUTH", 4))
+                  set_auth(parcel, line, line_len);
+               else
+                  parse_smtp_capability_response(parcel, line, line_len);
+            }
+
+            ptr += advance_chars;
+            break;
+      }
+   }
+}
+
+/**
+ * @brief Internal function for mcb_send_email() to send an email envelope.
+ *
+ * @param recipients is an array of pointers to const char*, with a
+ *                   final pointer to NULL to mark the end of the list.
+ */
+int send_envelope(MParcel *parcel, const char **recipients)
+{
+   if (!recipients)
+      return 0;
+
+   char buffer[1024];
+   const char **ptr = recipients;
+   int bytes_read;
+   int recipients_accepted = 0;
+   int reply_status;
+   mcb_send_data(parcel, "MAIL FROM: <", parcel->from, ">", NULL);
+   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+
+   reply_status = atoi(buffer);
+   if (reply_status >= 200 && reply_status < 300)
+   {
+      while (*ptr)
+      {
+         mcb_send_data(parcel, "RCPT TO: <", *ptr, ">", NULL);
+         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+         buffer[bytes_read] = '\0';
+         reply_status = atoi(buffer);
+         if (reply_status >= 200 && reply_status < 300)
+            ++recipients_accepted;
+         else
+            mcb_log_message(parcel, "Recipient, ", *ptr, ", was turned down by the server, ", buffer,  NULL);
+
+         ++ptr;
+      }
+
+      if (recipients_accepted)
+      {
+         mcb_send_data(parcel, "DATA", NULL);
+         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+         reply_status = atoi(buffer);
+         if (reply_status >= 300 && reply_status < 400)
+            return 1;
+         else
+         {
+            buffer[bytes_read] = '\0';
+            mcb_log_message(parcel, "Envelope transmission failed, \"", buffer, "\"", NULL);
+         }
+      }
+      else
+         mcb_log_message(parcel, "Emailing aborted for lack of approved recipients.", NULL);
+   }
+   else
+   {
+      mcb_log_message(parcel,
+                  "From field (",
+                  parcel->from,
+                  ") of SMTP envelope caused an error,\"",
+                  buffer,
+                  "\"",
+                  NULL);
+   }
+   
+   return 0;
+}
+
+/**
+ * @brief Internal function for mcb_send_email() to send email headers.
+ */
+int send_headers(MParcel *parcel, const char **recipients, const char **headers)
+{
+   if (!recipients)
+      return 0;
+
+   const char **ptr = recipients;
+
+   mcb_send_data(parcel, "From: ", parcel->from, NULL);
+
+   // Send all the recipients
+   while (*ptr)
+   {
+      mcb_send_data(parcel, "To: ", *ptr, NULL);
+      ++ptr;
+   }
+
+   // Send all the headers
+   ptr = headers;
+   while (*ptr)
+   {
+      mcb_send_data(parcel, *ptr, NULL);
+      ++ptr;
+   }
+
+   // Send blank line to terminate headers
+   mcb_send_data(parcel, "", NULL);
+
+   return 1;
+}
+
+/**
+ * @brief Returns 0 for error, 1 for success.
+ *
+ * The first character of a POP response indicates if the
+ * operation succeeded or failed.  '+' indicates success,
+ * like +OK.  '-' indicates failure.
+ *
+ * A POP error will be logged.
+ */
+int judge_pop_response(MParcel *parcel, const char *buffer, int len)
+{
+   if (buffer[0] == '+')
+      return 1;
+   else
+      mcb_log_message(parcel, "POP server error: ", &buffer[1], NULL);
+
+   return 0;
+}
+
+/**
+ * @brief Interprets the response to the POP STAT request.
+ *
+ * Note that the results are returned in pointer arguments.
+ */
+void parse_pop_stat(const char *buffer, int *count, int *inbox_size)
+{
+   const char *ptr = buffer;
+   *count = 0;
+   *inbox_size = 0;
+
+   while (!isdigit(*ptr))
+      ++ptr;
+
+   while (isdigit(*ptr))
+   {
+      *count *= 10;
+      *count += *ptr - '0';
+      ++ptr;
+   }
+
+   while (!isdigit(*ptr))
+      ++ptr;
+
+   while (isdigit(*ptr))
+   {
+      *inbox_size *= 10;
+      *inbox_size += *ptr - '0';
+      ++ptr;
+   }
+}
+
+/**
+ * @brief Identifies the start and length of the name and value values.
+ *
+ * Called by send_pop_message_header() to outsource the interpretation of a field in an email header
+ *
+ * The interpretation results are returned in pointer arguments of the function.
+ *
+ * The function returns the number of chars from the address of _*start_
+ * to the beginning of the next header line.  See send_pop_message_header()
+ * to better learn how to use this function.
+ */ 
 int parse_header_field(const char *start,
                        const char *end_of_buffer,
                        const char **tag,
@@ -634,7 +568,7 @@ int parse_header_field(const char *start,
  *        characters will be replaced with a single \t to aid in
  *        interpreting the value (split on tabs for sublines).
  */       
-void trim_copy_value(char *target, const char *source, int source_len)
+void copy_trimmed_email_field_value(char *target, const char *source, int source_len)
 {
    char *ptr_t = target;
    const char *ptr_s = source;
@@ -656,8 +590,6 @@ void trim_copy_value(char *target, const char *source, int source_len)
    }
    *ptr_t = '\0';
 }
-
-
 
 /**
  * @brief Retrieves the headers, parsing them into discrete name/value pairs and sending to callback.
@@ -716,7 +648,7 @@ int send_pop_message_header(PopClosure *popc)
                   cur->name = work;
 
                   work = (char*)alloca(value_len);
-                  trim_copy_value(work, value, value_len);
+                  copy_trimmed_email_field_value(work, value, value_len);
                   cur->value = work;
 
                   if (tail)
@@ -884,7 +816,7 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
       init_sock_talker(&talker, osocket);
       parcel->stalker = &talker;
 
-      if (is_opening_smtp(parcel))
+      if (mcb_is_opening_smtp(parcel))
       {
          bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
          fprintf(stderr, "Socket response: \"%.*s\".\n", bytes_read, buffer);
@@ -931,13 +863,111 @@ int mcb_greet_smtp_server(MParcel *parcel)
    bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
    parse_smtp_greeting_response(parcel, buffer, bytes_read);
 
-   if (authorize_smtp_session(parcel))
+   if (mcb_authorize_smtp_session(parcel))
       return 1;
    else
    {
       mcb_quit_smtp_server(parcel);
       return 0;
    }
+}
+
+/**
+ * @brief Send account credentials to the SMTP server.
+ */
+int mcb_authorize_smtp_session(MParcel *parcel)
+{
+   char buffer[1024];
+   int bytes_received;
+   int reply_status;
+
+   const char *login = parcel->login;
+   const char *password = parcel->password;
+
+   int use_plain = parcel->caps.cap_auth_plain;
+   int use_login = parcel->caps.cap_auth_login;
+
+   const char *auth_type = (use_plain?"PLAIN":(use_login?"LOGIN":NULL));
+
+   // PLAIN accepts concatenated \0login\0password string (both prefixed with NULL character).
+   // LOGIN accepts separate login and password submissions
+
+
+   if (auth_type)
+   {
+      /* mcb_send_data(parcel, "AUTH ", auth_type, NULL); */
+      mcb_send_data(parcel, "AUTH LOGIN", NULL);
+      bytes_received = mcb_recv_data(parcel, buffer, sizeof(buffer));
+      buffer[bytes_received] = '\0';
+
+      // reply status in the 300 range (334) indicates
+      // good so far, but need more inputx
+      reply_status = atoi(buffer);
+      if (reply_status >= 300 && reply_status < 400)
+      {
+         c64_encode_to_buffer(login, strlen(login), (uint32_t*)&buffer, sizeof(buffer));
+         mcb_advise_message(parcel,
+                        "Sending user name, ",
+                        login,
+                        ", encoded as ",
+                        buffer,
+                        ", to the server.",
+                        NULL);
+
+         mcb_send_data(parcel, buffer, NULL);
+         bytes_received = mcb_recv_data(parcel, buffer, sizeof(buffer));
+         buffer[bytes_received] = '\0';
+
+
+         // reply status in the 300 range (334) indicates
+         // good so far, but need more inputx
+         reply_status = atoi(buffer);
+         if (reply_status >= 300 && reply_status < 400)
+         {
+            c64_encode_to_buffer(password, strlen(password), (uint32_t*)&buffer, sizeof(buffer));
+            mcb_advise_message(parcel,
+                           "Sending password, encoded as ",
+                           buffer,
+                           ", to the server.",
+                           NULL);
+
+            mcb_send_data(parcel, buffer, NULL);
+            bytes_received = mcb_recv_data(parcel, buffer, sizeof(buffer));
+            buffer[bytes_received] = '\0';
+            reply_status = atoi(buffer);
+            if (reply_status >= 200 && reply_status < 300)
+               return 1;
+            else
+               mcb_log_message(parcel,
+                           "For login name, ",
+                           login,
+                           ", the password was not accepted by the server.",
+                           " (",
+                           buffer,
+                           ")",
+                           NULL);
+         }
+         else
+            mcb_log_message(parcel,
+                        "Login name, ",
+                        login,
+                        ", not accepted by the server.",
+                        " (",
+                        buffer,
+                        ")",
+                        NULL);
+      }
+      else
+         mcb_log_message(parcel,
+                     "Authorization request failed with \"",
+                     buffer,
+                     "\"",
+                     NULL);
+   }
+   else
+      mcb_log_message(parcel, "mailcb only supports PLAIN and LOGIN authorization.", NULL);
+
+   return 0;
 }
 
 /**
@@ -996,105 +1026,6 @@ void mcb_greet_pop_server(MParcel *parcel)
          }
       }
    }
-}
-
-/**
- * @brief Internal function for mcb_send_email() to send an email envelope.
- *
- * @param recipients is an array of pointers to const char*, with a
- *                   final pointer to NULL to mark the end of the list.
- */
-int send_envelope(MParcel *parcel, const char **recipients)
-{
-   if (!recipients)
-      return 0;
-
-   char buffer[1024];
-   const char **ptr = recipients;
-   int bytes_read;
-   int recipients_accepted = 0;
-   int reply_status;
-   mcb_send_data(parcel, "MAIL FROM: <", parcel->from, ">", NULL);
-   bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-
-   reply_status = atoi(buffer);
-   if (reply_status >= 200 && reply_status < 300)
-   {
-      while (*ptr)
-      {
-         mcb_send_data(parcel, "RCPT TO: <", *ptr, ">", NULL);
-         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-         buffer[bytes_read] = '\0';
-         reply_status = atoi(buffer);
-         if (reply_status >= 200 && reply_status < 300)
-            ++recipients_accepted;
-         else
-            mcb_log_message(parcel, "Recipient, ", *ptr, ", was turned down by the server, ", buffer,  NULL);
-
-         ++ptr;
-      }
-
-      if (recipients_accepted)
-      {
-         mcb_send_data(parcel, "DATA", NULL);
-         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-         reply_status = atoi(buffer);
-         if (reply_status >= 300 && reply_status < 400)
-            return 1;
-         else
-         {
-            buffer[bytes_read] = '\0';
-            mcb_log_message(parcel, "Envelope transmission failed, \"", buffer, "\"", NULL);
-         }
-      }
-      else
-         mcb_log_message(parcel, "Emailing aborted for lack of approved recipients.", NULL);
-   }
-   else
-   {
-      mcb_log_message(parcel,
-                  "From field (",
-                  parcel->from,
-                  ") of SMTP envelope caused an error,\"",
-                  buffer,
-                  "\"",
-                  NULL);
-   }
-   
-   return 0;
-}
-
-/**
- * @brief Internal function for mcb_send_email() to send email headers.
- */
-int send_headers(MParcel *parcel, const char **recipients, const char **headers)
-{
-   if (!recipients)
-      return 0;
-
-   const char **ptr = recipients;
-
-   mcb_send_data(parcel, "From: ", parcel->from, NULL);
-
-   // Send all the recipients
-   while (*ptr)
-   {
-      mcb_send_data(parcel, "To: ", *ptr, NULL);
-      ++ptr;
-   }
-
-   // Send all the headers
-   ptr = headers;
-   while (*ptr)
-   {
-      mcb_send_data(parcel, *ptr, NULL);
-      ++ptr;
-   }
-
-   // Send blank line to terminate headers
-   mcb_send_data(parcel, "", NULL);
-
-   return 1;
 }
 
 /**

@@ -654,6 +654,7 @@ void trim_copy_value(char *target, const char *source, int source_len)
       else
          *ptr_t++ = *ptr_s++;
    }
+   *ptr_t = '\0';
 }
 
 

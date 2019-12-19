@@ -9,7 +9,7 @@ CC = cc
 
 all : libmailcb.so mailer
 
-libmailcb.so : libmailcb.c mailcb.h socktalk.o socktalk.h commparcel.c
+libmailcb.so : libmailcb.c mailcb.h mailcb_internal.c socktalk.o socktalk.h commparcel.c
 	$(CC) $(LIB_CFLAGS) -o libmailcb.so socktalk.o libmailcb.c -lssl -lcrypto -lcode64
 
 socktalk.o : socktalk.c socktalk.h
@@ -21,7 +21,7 @@ clean :
 mailer : mailer.c libmailcb.so mailcb.h
 	$(CC) $(BASEFLAGS) -L. -o mailer mailer.c $(LOCAL_LINK) -lreadini
 
-debug: libmailcb.c mailcb.h socktalk.o socktalk.h commparcel.c commparcel.h mailer.c
+debug: libmailcb.c mailcb.h mailcb_internal.h socktalk.o socktalk.h commparcel.c commparcel.h mailer.c
 	$(CC) $(LIB_CFLAGS) -c -o socktalkd.o socktalk.c
 	$(CC) $(LIB_CFLAGS) -o libmailcbd.so socktalkd.o libmailcb.c -lssl -lcrypto -lcode64
 	$(CC) $(BASEFLAGS) -L. -o mailerd mailer.c $(LOCAL_LINK)d -lreadini

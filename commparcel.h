@@ -1,6 +1,8 @@
 #ifndef COMMPARCEL_H
 #define COMMPARCEL_H
 
+#include "mailcb.h"
+
 typedef void (*Set_Cap_Func)(MParcel *mp, const char *line, int len);
 typedef struct _cap_string
 {

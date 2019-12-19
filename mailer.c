@@ -19,7 +19,6 @@ int update_if_needed(const char *name, const ri_Line *line, const char **target,
 
 void server_notice_html(MParcel *parcel)
 {
-   printf("Got notice from MailCB.  Sending HTML message.\n");
    mcb_send_email(parcel,
                   // Recipients:
                   (const char*[]){"chuck@cpjj.net", "chuckjungmann@gmail.com", NULL},
@@ -40,9 +39,33 @@ void server_notice_html(MParcel *parcel)
                   "</html>");
 }
 
+void server_notice_text(MParcel *parcel)
+{
+   mcb_send_email(parcel,
+                  // Recipients:
+                  (const char*[]){"chuck@cpjj.net", NULL},
+                  // Headers:
+                  (const char*[]){"Subject: SMTP Server Debugging", NULL},
+                  // Message:
+                  "The message is required in order to make a complete email\n"
+                  "package.  Please don't misinterpret my intentions.  I only\n"
+                  "want to test a bulk email sender.");
+}
+
+void begin_smtp_conversation(MParcel *parcel)
+{
+   if (mcb_authorize_smtp_session(parcel))
+   {
+      server_notice_text(parcel);
+      server_notice_html(parcel);
+   }
+}
+
+/**
+ * @brief Callback function for processing pop headers.  For parcel->pop_message_receiver.
+ */
 int pop_message_receiver(PopClosure *popc, const HeaderField *fields)
 {
-
    const HeaderField *ptr;
    int str_len,  max_name_len = 0;
 
@@ -70,32 +93,11 @@ int pop_message_receiver(PopClosure *popc, const HeaderField *fields)
    return 1;
 }
 
-void server_notice_text(MParcel *parcel)
-{
-   printf("Got notice from MailCB.\n");
-
-   mcb_send_email(parcel,
-                  (const char*[]){"chuck@cpjj.net", NULL},
-                  (const char*[]){"Subject: SMTP Server Debugging", NULL},
-                  "The message is required in order to make a complete email\n"
-                  "package.  Please don't misinterpret my intentions.  I only\n"
-                  "want to test a bulk email sender.");
-}
-
-void begin_smtp_conversation(MParcel *parcel)
-{
-   if (authorize_smtp_session(parcel))
-   {
-      server_notice_text(parcel);
-      server_notice_html(parcel);
-   }
-}
-
 void talker_user(MParcel *parcel)
 {
    mcb_advise_message(parcel, "Entered the talker_user function.", NULL);
 
-   if (is_opening_smtp(parcel))
+   if (mcb_is_opening_smtp(parcel))
       begin_smtp_conversation(parcel);
    else
       mcb_greet_pop_server(parcel);

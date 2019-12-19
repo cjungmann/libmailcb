@@ -526,7 +526,7 @@ void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
             {
                log_ssl_error(parcel, ssl, connect_outcome);
                mcb_log_message(parcel, "ssl connection failed and aborted.", NULL);
-               mcb_log_message(parcel, "host: ", parcel->host_url, ", user: ", parcel->user, NULL);
+               mcb_log_message(parcel, "host: ", parcel->host_url, ", from: ", parcel->from, NULL);
             }
 
             SSL_free(ssl);
@@ -1014,7 +1014,7 @@ int send_envelope(MParcel *parcel, const char **recipients)
    int bytes_read;
    int recipients_accepted = 0;
    int reply_status;
-   mcb_send_data(parcel, "MAIL FROM: <", parcel->user, ">", NULL);
+   mcb_send_data(parcel, "MAIL FROM: <", parcel->from, ">", NULL);
    bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
 
    reply_status = atoi(buffer);
@@ -1054,7 +1054,7 @@ int send_envelope(MParcel *parcel, const char **recipients)
    {
       mcb_log_message(parcel,
                   "From field (",
-                  parcel->user,
+                  parcel->from,
                   ") of SMTP envelope caused an error,\"",
                   buffer,
                   "\"",
@@ -1074,7 +1074,7 @@ int send_headers(MParcel *parcel, const char **recipients, const char **headers)
 
    const char **ptr = recipients;
 
-   mcb_send_data(parcel, "From: ", parcel->user, NULL);
+   mcb_send_data(parcel, "From: ", parcel->from, NULL);
 
    // Send all the recipients
    while (*ptr)

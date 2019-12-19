@@ -91,7 +91,9 @@ typedef struct _comm_parcel
    /** SMTP server login credentials */
    const char *login;
    const char *password;
-   const char *user;
+
+   /** for FROM: field in outgoing emails. */
+   const char *from;
 
    /** Points to a config file section from which connection information can be read. */
    const char *account;   // Only used if a config file had been opened.

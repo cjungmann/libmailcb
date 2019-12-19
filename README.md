@@ -49,6 +49,14 @@ use_tls  on                    # Start TLS after HELO
 user     gmail_user@gmail.com  # for the RCV FROM: of the email envelope
 from     gmail_user@gmail.com  # for email header.  This may disappear
 password abcdefghijklmnop      # Google-provided password to authorize two-factor authentication.
+
+[gmail pop]
+host     pop.gmail.com
+type     pop                   # flag to initiate POP processing
+port     995
+use_tls  on
+user     gmail_user@gmail.com
+password abcdefghijklmnop
 ~~~
 
 

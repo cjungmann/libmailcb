@@ -5,6 +5,290 @@
 #include "mailcb.h"
 #include <readini.h>
 
+typedef struct _mailer_data
+{
+   int  read_file;
+   FILE *file_to_read;
+} MailerData;
+
+typedef struct _line_link
+{
+   const char *line_str;
+   struct _line_link *next;
+} LineLink;
+
+
+
+void send_the_email(MParcel *parcel, LineLink *recipients, LineLink *headers, LineLink *body)
+{
+   int recip_count = 0;
+   int field_count = 0;
+   int body_count = 0;
+   LineLink *ptr;
+   const char **aptr;
+
+   // Convert recipients chain to NULL-terminated char* array
+   ptr = recipients;
+   while (ptr)
+   {
+      ++recip_count;
+      ptr = ptr->next;
+   }
+
+   const char **arr_recipients = (const char**)alloca(sizeof(char*) * (recip_count + 1));
+   aptr = arr_recipients;
+   ptr = recipients;
+   while (ptr)
+   {
+      *aptr = ptr->line_str;
+      ++aptr;
+
+      ptr = ptr->next;
+   }
+   *aptr = NULL;
+
+   // Convert headers chain to NULL-terminated char* array
+   ptr = headers;
+   while (ptr)
+   {
+      ++field_count;
+      ptr = ptr->next;
+   }
+
+   const char **arr_fields = (const char**)alloca(sizeof(char*) * (field_count + 1));
+   aptr = arr_fields;
+   ptr = headers;
+   while (ptr)
+   {
+      *aptr = ptr->line_str;
+      ++aptr;
+
+      ptr = ptr->next;
+   }
+   *aptr = NULL;
+
+   // Convert message body chain to NULL-terminated char* array
+   ptr = body;
+   while (ptr)
+   {
+      ++body_count;
+      ptr = ptr->next;
+   }
+
+   const char **arr_blines = (const char**)alloca(sizeof(char*) * (body_count + 1));
+   aptr = arr_blines;
+   ptr = body;
+   while (ptr)
+   {
+      *aptr = ptr->line_str;
+      ++aptr;
+
+      ptr = ptr->next;
+   }
+   *aptr = NULL;
+   
+   char snum_rcount[10];
+   char snum_fcount[10];
+   char snum_bcount[10];
+
+   mcb_itoa_buff(recip_count, 10, snum_rcount, sizeof(snum_rcount));
+   mcb_itoa_buff(field_count, 10, snum_fcount, sizeof(snum_fcount));
+   mcb_itoa_buff(body_count, 10, snum_bcount, sizeof(snum_bcount));
+   mcb_advise_message(parcel,
+                      "Sending email with ",
+                      snum_rcount,
+                      " recipients and ",
+                      snum_fcount,
+                      " header fields and ",
+                      snum_bcount,
+                      " body lines.",
+                      NULL);
+}
+
+/**
+ * @brief Return the number of bytes to the last character of the line.
+ *
+ * This function finds the \r or \n that terminates a line
+ * and returns the number of bytes to the character just before
+ * the line-terminator character(s).
+ *
+ * If no end-line can be detected, the function returns -1
+ *
+ * The calling function is responsible for skipping past the
+ * line-terminator character(s).
+ */
+int detect_line(const char *source, const char *end)
+{
+   const char *ptr = source;
+   while (ptr < end && *ptr != '\r' && *ptr != '\n')
+      ++ptr;
+
+   if (ptr==end)
+      return -1;
+   else
+      return ptr - source;
+}
+
+void emails_from_file(MParcel *parcel)
+{
+   FILE *efile = ((MailerData*)parcel->data)->file_to_read;
+
+   char buffer[1024];
+   size_t bytes_read;
+   int offset;
+
+   // 0 for recipients, 1, for headers, 2 for message, 3 email complete
+   int content_state = 0;
+
+   // Use pointer to test for end, rather than index
+   const char *end;
+
+   LineLink *recipients = NULL;
+   LineLink *headers = NULL;
+   LineLink *body = NULL;
+
+   LineLink *tail = NULL;
+   LineLink *work_ll;
+
+   char *line, *work_str;
+   int line_len;
+
+   // If the last character of a buffer is \r, we'll ignore
+   // an \n in the first character of the buffer
+   char buffer_ending_char = '\0';
+
+   // The first character of the buffer should always be
+   // the first character of a line.  If a line is truncated
+   // at the end of the buffer, the beginning of the current
+   // line should be memmove-d to the beginning of the buffer,
+   // and the offset set to begin reading at the end of previous
+   // transmission.
+
+   offset = 0;
+   while ((bytes_read = fread(&buffer[offset], 1, sizeof(buffer) - offset, efile)))
+   {
+      // Mark end of read data
+      end = &buffer[bytes_read + offset];
+
+      // Skip inital \n if it was separated from a preceding \r
+      if (buffer_ending_char == '\r' && *buffer == '\n')
+         line = &buffer[1];
+      else
+         line = buffer;
+
+      // Extract lines from the buffer
+      while ((line_len=detect_line(line, end)) >= 0)
+      {
+         // Make new LineLink with the string:
+         work_ll = (LineLink*)alloca(sizeof(LineLink));
+         memset(work_ll, 0, sizeof(LineLink));
+
+         // Add string only if available, otherwise leave
+         // work_ll == NULL to indicate an empty line;
+         if (line_len > 0)
+         {
+            work_str = (char*)alloca(line_len+1);
+            memcpy(work_str, line, line_len);
+            work_str[line_len] = '\0';
+
+            work_ll->line_str = work_str;
+         }
+
+         // Add the link to the current chain
+         if (tail)
+         {
+            tail->next = work_ll;
+            tail = work_ll;
+         }
+         // or begin a new chain
+         else if (content_state == 0)
+            recipients = tail = work_ll;
+         else if (content_state == 1)
+            headers = tail = work_ll;
+         else
+            body = tail = work_ll;
+
+         // Prepare for next iteration of the while loop:
+
+         // Move to start of next line:
+         line += line_len;
+         buffer_ending_char = *line;
+         while (line < end && (*line == '\r' || *line == '\n'))
+            ++line;
+
+         // If end of recipients or headers section (marked by \v),
+         // clear *tail to trigger next operation
+         if (line < end)
+         {
+            // vertical tab between sections, form-feed between emails
+            if (*line == '\v' || *line == '\f')
+            {
+               // Advance the content state (recipients, headers, body)
+               ++content_state;
+
+               // Ignore the \v or \f, once detected
+               ++line;
+               tail = NULL;
+            }
+
+            // If email contents complete, send and reset for next email
+            if (content_state > 2)
+            {
+               send_the_email(parcel, recipients, headers, body);
+               recipients = headers = body = NULL;
+               content_state = 0;
+            }
+         }
+      } // end line-reading while loop
+
+
+      // If incomplete line, move it to the beginning of the buffer
+      // before reading more from the FILE
+      if (line > buffer)
+      {
+         offset = end - line;
+         memmove(buffer, line, offset);
+         continue;
+      }
+   }
+
+   // fread has exhausted the input file, we're done.
+
+   // Send email-in-process if complete the terminating \f
+   // was omitted and the email includes a body:
+   if (content_state > 2)
+      send_the_email(parcel, recipients, headers, body);
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 int update_if_needed(const char *name, const ri_Line *line, const char **target, const MParcel *parcel)
 {
    if (*target == NULL)
@@ -52,12 +336,51 @@ void server_notice_text(MParcel *parcel)
                   "want to test a bulk email sender.");
 }
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 void begin_smtp_conversation(MParcel *parcel)
 {
    if (mcb_authorize_smtp_session(parcel))
    {
-      server_notice_text(parcel);
-      server_notice_html(parcel);
+      if (((MailerData*)parcel->data)->read_file)
+      {
+         emails_from_file(parcel);
+      }
+      else
+      {
+         server_notice_text(parcel);
+         server_notice_html(parcel);
+      }
    }
 }
 
@@ -181,10 +504,11 @@ void show_usage(void)
       "-c config file path\n"
       "-f from email address\n"
       "-h host url\n"
+      "-i email input file, '-' for stdin\n"
       "-l login name\n"
       "-p port number\n"
       "-r POP3 reader\n"
-      "-q quiet, supress error messages\n"
+      "-q quiet, suppress error messages\n"
       "-t use TLS encryption\n"
       "-v generate verbose output\n"
       "-w password\n";
@@ -199,6 +523,8 @@ int main(int argc, const char** argv)
    mparcel.logfile = stderr;
    mparcel.callback_func = begin_smtp_conversation;
 
+   MailerData md = { 0 };
+   mparcel.data = (void*)&md;
 
    // process command line arguments:
    const char **cur_arg = argv;
@@ -206,6 +532,11 @@ int main(int argc, const char** argv)
    const char *str;
 
    const char *config_file_path = "./mailer.conf";
+   const char *input_file_path = NULL;
+
+   // Advise access to help if command called with no arguments:
+   if (argc == 1)
+      printf("-? for help.\n");
 
    while (cur_arg < end_arg)
    {
@@ -241,6 +572,14 @@ int main(int argc, const char** argv)
                   if (cur_arg + 1 < end_arg)
                   {
                      mparcel.host_url = *++cur_arg;
+                     goto continue_next_arg;
+                  }
+                  break;
+               case 'i':  // read batch emails from a file
+                  if (cur_arg + 1 < end_arg)
+                  {
+                     input_file_path = *++cur_arg;
+                     md.read_file = 1;
                      goto continue_next_arg;
                   }
                   break;
@@ -292,6 +631,33 @@ int main(int argc, const char** argv)
       ++cur_arg;
    }
 
+   if (input_file_path)
+   {
+      if (0 == strcmp(input_file_path, "-"))
+      {
+         md.file_to_read = stdin;
+         md.read_file = 1;
+      }
+      else
+      {
+         md.file_to_read = fopen(input_file_path, "r");
+         if (md.file_to_read)
+            md.read_file = 1;
+         else
+         {
+            mcb_log_message(&mparcel,
+                            "Failed to open \"",
+                            input_file_path,
+                            "\", ",
+                            strerror(errno),
+                            NULL);
+
+            return 1;
+         }
+      }
+   }
+
+
    int access_result;
    if (config_file_path
        && 0 == (access_result = access(config_file_path, F_OK|R_OK)))
@@ -307,8 +673,16 @@ int main(int argc, const char** argv)
       begin_after_read_config_attempt(NULL, (void*)&mparcel);
    }
 
+   if (md.file_to_read && md.file_to_read != stdin)
+      fclose(md.file_to_read);
+
   abort_program:
    return 0;
 }
+
+
+
+
+
 
 

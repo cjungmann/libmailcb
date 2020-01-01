@@ -96,7 +96,7 @@ int get_connected_socket(const char *host_url, int port)
    struct addrinfo *ai_chain, *rp;
 
    int exit_value;
-   int open_socket, temp_socket = -1;
+   int open_socket = -1, temp_socket = -1;
 
    int port_buffer_len = mcb_digits_in_base(port, 10) + 1;
    char *port_buffer = (char*)alloca(port_buffer_len);
@@ -138,6 +138,14 @@ int get_connected_socket(const char *host_url, int port)
          }
 
          freeaddrinfo(ai_chain);
+      }
+      else // exit_value != 0 getaddrinfo call failed
+      {
+         fprintf(stderr,
+                 "Failed to open socket for %s : %d: %s.\n",
+                 host_url,
+                 port,
+                 gai_strerror(exit_value));
       }
    }
    return open_socket;
@@ -338,6 +346,8 @@ int send_envelope(MParcel *parcel, const char **recipients)
    reply_status = atoi(buffer);
    if (reply_status >= 200 && reply_status < 300)
    {
+      printf("env response: '%.*s'\n", bytes_read, buffer);
+
       while (*ptr)
       {
          mcb_send_data(parcel, "RCPT TO: <", *ptr, ">", NULL);
@@ -613,75 +623,82 @@ int send_pop_message_header(PopClosure *popc)
    mcb_itoa_buff(popc->message_index+1, 10, buffer, sizeof(buffer));
    mcb_send_data(popc->parcel, "TOP ", buffer, " 0", NULL);
 
-   if ((bytes_read = mcb_recv_data(popc->parcel, buffer, sizeof(buffer))) > 0)
+   while ((bytes_read = mcb_recv_data(popc->parcel, buffer, sizeof(buffer))) > 0)
    {
       end_of_buffer = &buffer[bytes_read];
       line = ptr = buffer;
 
       while (line < end_of_buffer)
       {
-         if (*line == '-')
-         {
-            mcb_log_message(popc->parcel, "Unexpected failure for TOP: \"", buffer, "\"", NULL);
-            goto abort_processing;
-         }
-         else
-         {
-            bytes_to_advance = parse_header_field(line,
-                                                  end_of_buffer,
-                                                  &name,
-                                                  &name_len,
-                                                  &value,
-                                                  &value_len);
+         bytes_to_advance = parse_header_field(line,
+                                               end_of_buffer,
+                                               &name,
+                                               &name_len,
+                                               &value,
+                                               &value_len);
 
-            if (name)
+         if (!popc->message_confirmed)
+         {
+            if (*line == '-')
             {
-               if (value)
-               {
-                  cur = (HeaderField*)alloca(sizeof(HeaderField));
-                  memset(cur, 0, sizeof(HeaderField));
-
-                  work = (char*)alloca(name_len+1);
-                  memcpy(work, name, name_len);
-                  work[name_len] = '\0';
-
-                  cur->name = work;
-
-                  work = (char*)alloca(value_len);
-                  copy_trimmed_email_field_value(work, value, value_len);
-                  cur->value = work;
-
-                  if (tail)
-                  {
-                     tail->next = cur;
-                     tail = cur;
-                  }
-                  else
-                     head = tail = cur;
-               }
-               else if (0 == strncmp(name, "+OK", 3))
-               {
-                  ; // ignore status line
-               }
-               else  // Incomplete field, shift and continue reading
-               {
-                  memmove(buffer, line, bytes_to_advance);
-                  bytes_read = mcb_recv_data(popc->parcel,
-                                             &buffer[bytes_to_advance],
-                                             sizeof(buffer)-bytes_to_advance);
-
-                  end_of_buffer = &buffer[bytes_read + bytes_to_advance];
-                  line = ptr = buffer;
-
-                  // Bypass update
-                  continue;
-               }
+               mcb_log_message(popc->parcel, "Unexpected failure for TOP: \"", line, "\"", NULL);
+               goto abort_processing;
+            }
+            else if (*line != '+')
+            {
+               mcb_log_message(popc->parcel, "Unexpected confirmation line, \"", line, "\"", NULL);
             }
 
-            line += bytes_to_advance;
+            popc->message_confirmed = 1;
          }
+
+         if (name)
+         {
+            if (value)
+            {
+               cur = (HeaderField*)alloca(sizeof(HeaderField));
+               memset(cur, 0, sizeof(HeaderField));
+
+               work = (char*)alloca(name_len+1);
+               memcpy(work, name, name_len);
+               work[name_len] = '\0';
+
+               cur->name = work;
+
+               work = (char*)alloca(value_len);
+               copy_trimmed_email_field_value(work, value, value_len);
+               cur->value = work;
+
+               if (tail)
+               {
+                  tail->next = cur;
+                  tail = cur;
+               }
+               else
+                  head = tail = cur;
+            }
+            else if (0 == strncmp(name, "+OK", 3))
+            {
+               ; // ignore status line
+            }
+            else  // Incomplete field, shift and continue reading
+            {
+               memmove(buffer, line, bytes_to_advance);
+               bytes_read = mcb_recv_data(popc->parcel,
+                                          &buffer[bytes_to_advance],
+                                          sizeof(buffer)-bytes_to_advance);
+
+               end_of_buffer = &buffer[bytes_read + bytes_to_advance];
+               line = ptr = buffer;
+
+               // Bypass update
+               continue;
+            }
+         }
+
+         line += bytes_to_advance;
       } // while (line < end_of_buffer)
-   }
+   }  // while bytes_read > 0
 
    assert(popc->parcel->pop_message_receiver);
    return (*popc->parcel->pop_message_receiver)(popc, head);
@@ -808,7 +825,7 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
    int         bytes_read;
 
    int osocket = get_connected_socket(host, port);
-   if (osocket)
+   if (osocket > 0)
    {
       mcb_advise_message(parcel, "Got an open socket.", NULL);
 
@@ -1014,6 +1031,7 @@ void mcb_greet_pop_server(MParcel *parcel)
             while (popc.message_index < popc.message_count)
             {
                mcb_advise_message(parcel, "Processing an email.", NULL);
+               popc.message_confirmed = 0;
                if (send_pop_message_header(&popc))
                   ++popc.message_index;
                else

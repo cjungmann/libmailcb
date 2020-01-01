@@ -1,4 +1,4 @@
-// -*- compile-command: "gcc -Wall -Werror -DINCLUDE_MAIN -ggdb -U NDEBUG -o buffread buffread.c " -*-
+// -*- compile-command: "gcc -Wall -Werror -DBUFFREAD_MAIN -ggdb -U NDEBUG -o buffread buffread.c " -*-
 
 #include <stdio.h>     // for fprintf()
 #include <stdlib.h>    // for exit()
@@ -7,6 +7,11 @@
 #include <assert.h>
 
 #include "buffread.h"
+
+// Private, internal functions
+const char *find_bc_end_of_line(const char *cur_line, const char *limit);
+const char *find_bc_start_of_next_line(const char *line_ending_char, const char *limit);
+void read_into_bc_buffer(BuffControl *bc);
 
 /**
  * @brief Returns a pointer just past the last character of the line.
@@ -77,7 +82,8 @@ void read_into_bc_buffer(BuffControl *bc)
    if (bytes_read == 0)
       bc->reached_EOF = 1;
 
-   fprintf(stderr, "[34;1mread %4d characters into the buffer.[m\n", bytes_read);
+   if (bc->log_reads)
+      fprintf(stderr, "[34;1mread %4d characters into the buffer.[m\n", bytes_read);
 
    // Set BuffControl to new situation:
    bc->end_of_data = &read_target[bytes_read];
@@ -88,13 +94,21 @@ void read_into_bc_buffer(BuffControl *bc)
 }
 
 /**
+ * @brief Prepares a BuffControl structure for use and executes the initial read
  *
+ * @param bc          Pointer to a BuffControl variable.  Function clears before setting members
+ * @param buffer      Pointer to a block of memory into which the source contents will be written
+ * @param buff_len    Length, in bytes, of the buffer
+ * @param breader     Pointer to function that fills the buffer
+ * @param data_source Generic data pointer to context used by breader parameter
+ *
+ * This function prepares the BuffControl structure and 
  */
 void init_buff_control(BuffControl *bc,
                        char *buffer,
                        int buff_len,
-                       void *data_source,
-                       BReader breader)
+                       BReader breader,
+                       void *data_source)
 {
    memset(bc, 0, sizeof(BuffControl));
 
@@ -107,7 +121,24 @@ void init_buff_control(BuffControl *bc,
 }
 
 /**
+ * @brief Through pointer parameters, this function returns the current line to the calling function.
  *
+ * @param bc       Initialized and valid BuffControl object
+ * @param line     Pointer-to-pointer to an unterminated char string.  This is
+ *                 where the function returns the line.
+ * @param line_len The function returns the line length in this parameter.  Use this
+ *                 value to know where the line ends (there will likely be no \0
+ *                 terminator.
+ *
+ * @return 0 for no line, 1 for valid line.
+ *
+ * This function returns the current line.  After retrieving the line, the
+ * BuffControl object will be updated to point to the next line.
+ *
+ * Important note: All lines are counted through the new line character(s), with
+ *                 the possible exception of the last line, which can also be
+ *                 terminated by an EOF.  That means that an empty final line
+ *                 will be ignored.
  */
 int get_bc_line(BuffControl *bc, const char **line, int *line_len)
 {
@@ -152,7 +183,7 @@ int get_bc_line(BuffControl *bc, const char **line, int *line_len)
    return get_bc_line(bc, line, line_len);
 }
 
-#ifdef INCLUDE_MAIN
+#ifdef BUFFREAD_MAIN
 
 #include <stdlib.h>
 
@@ -186,7 +217,11 @@ int main(int argc, const char **argv)
       FILE *fstream = fopen(argv[1], "r");
       if (fstream)
       {
-         init_buff_control(&bc, buffer, sizeof(buffer), (void*)fstream, file_reader);
+         init_buff_control(&bc, buffer, sizeof(buffer), file_reader, (void*)fstream);
+
+         // Set for debugging, show timing and size of reads to stderr:
+         /* bc.log_reads = 1; */
+
          read_the_file(&bc);
 
          fclose(fstream);

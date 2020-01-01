@@ -41,6 +41,7 @@ typedef struct _pop_closure
    int message_count;
    int inbox_size;
    int message_index;
+   int message_confirmed;
 } PopClosure;
 
 

@@ -30,6 +30,11 @@ CapString capstrings[] = {
 int capstrings_count = sizeof(capstrings) / sizeof(CapString);
 const CapString *capstring_end = &capstrings[sizeof(capstrings) / sizeof(CapString)];
 
+size_t STalkerReader(void *stalker, char *buffer, int buffer_len)
+{
+   return stk_recv_line((STalker*)stalker, buffer, buffer_len);
+}
+
 /**
  * @brief Creates a readable message from SSL_get_error() for logging an error.
  */
@@ -81,6 +86,13 @@ void log_ssl_error(MParcel *parcel, const SSL *ssl, int ret)
 
       mcb_log_message(parcel, "Unrecognized SSL_get_error() response, \"", msg, "\"",  NULL);
    }
+}
+
+void log_pop_closure_message(const PopClosure *pc, const char *msg)
+{
+   char buffer[128];
+   sprintf(buffer, "At message %d of %d, ", pc->message_index, pc->message_count);
+   mcb_log_message(pc->parcel, buffer, msg, NULL);
 }
 
 /**
@@ -476,238 +488,211 @@ void parse_pop_stat(const char *buffer, int *count, int *inbox_size)
    }
 }
 
-/**
- * @brief Identifies the start and length of the name and value values.
- *
- * Called by send_pop_message_header() to outsource the interpretation of a field in an email header
- *
- * The interpretation results are returned in pointer arguments of the function.
- *
- * The function returns the number of chars from the address of _*start_
- * to the beginning of the next header line.  See send_pop_message_header()
- * to better learn how to use this function.
- */ 
-int parse_header_field(const char *start,
-                       const char *end_of_buffer,
-                       const char **tag,
-                       int *tag_len,
-                       const char **value,
-                       int *value_len)
+void parse_pop_line(const char *buffer,
+                    const char *end,
+                    const char **name,
+                    int *name_len,
+                    const char **value,
+                    int *value_len)
 {
-   *tag = *value = NULL;
-   *tag_len = *value_len = 0;
+   *name = *value = NULL;
+   *name_len = *value_len = 0;
 
-   const char *end_of_field = NULL;
-   const char *end_of_consideration = NULL;
+   // Progress flags
+   int done_with_name = 0;
 
-   const char *ptr = start;
+   // If the first character is a space, we're on a follow-on
+   // value.  There will be no name
+   if (isspace(*buffer))
+      done_with_name = 1;
 
-   // Find the end-of-field:
-   while (ptr < end_of_buffer)
+   const char *spaces;
+   const char *ptr = buffer;
+   while (ptr < end)
    {
-      if (0 == strncmp(ptr,"\r\n",2))
+      if (!done_with_name)
       {
-         // End of field if \r\n and a non-space character
-         // introducing the next header field
-         if (!isspace(*(ptr+2)))
+         if (*ptr == ':')
          {
-            end_of_field = ptr;
+            *name = buffer;
+            spaces = ptr;
 
-            // point to beginning of next line:
-            end_of_consideration = ptr + 2;
-            break;
-         }
-         else if (0 == strncmp(&ptr[2], "\r\n", 2))
-         {
-            end_of_field = ptr;
+            while (isspace(*--spaces))
+               ;
 
-            // Point to end of buffer to end fields processing
-            end_of_consideration = end_of_buffer;
-            break;
+            // spaces now points to the last character of the string,
+            // instead of the character just after.  We need to add
+            // one to the difference in order to make the value mean
+            // the same thing as elsewhere.
+            ++spaces;
+
+            *name_len = spaces - buffer;
+
+            done_with_name = 1;
          }
+      }
+      // skip post-colon spaces to find beginning of value
+      else if (!isspace(*ptr))
+      {
+         *value = ptr;
+         break;
       }
 
       ++ptr;
    }
 
-   // If can't find end-of-field, return character count to end-of-buffer: 
-   if (! end_of_field)
-      return (end_of_buffer - start);
-
-   *tag = start;
-
-   // If +OK, set tag_len but not value or value_len to
-   // help the calling function move to the next line
-   if (0 == strncmp(ptr, "+OK", 3))
+   if (done_with_name && *value)
    {
-      *tag_len = end_of_field - *tag;
+      // Walk back any trailing spaces
+      spaces = end;
+      while (isspace(*--spaces))
+         ;
+      // See comment about spaces above.
+      spaces++;
+
+      *value_len = spaces - *value;
    }
    else
    {
-      // ptr at end-of-field, return to beginning of line for char comparison:
-      ptr = *tag;
-
-      // Find the colon, which marks the end of the tag
-      while (ptr < end_of_field && *ptr != ':')
-         ++ptr;
-
-      *tag_len = ptr - *tag;
-
-      if (*ptr == ':')
-      {
-         // Trim spaces to find start of value.
-         // Note different "while" form because the starting
-         // colon is assured and is not a space, so we must
-         // increment the pointer before checking if space.
-         while (++ptr < end_of_field && isspace(*ptr))
-            ;
-
-         *value = ptr;
-
-         *value_len = end_of_field - ptr;
-      }
+      *name = buffer;
+      *name_len = spaces - buffer;
    }
-
-   return end_of_consideration - start;
 }
 
-/**
- * @brief This function assumes that the size of the target is the
- *        same as the source.  The target may end up shorter than
- *        source if the source is a multi-line value, and the \r\n\s+
- *        characters will be replaced with a single \t to aid in
- *        interpreting the value (split on tabs for sublines).
- */       
-void copy_trimmed_email_field_value(char *target, const char *source, int source_len)
-{
-   char *ptr_t = target;
-   const char *ptr_s = source;
-   const char *end_source = source + source_len;
-
-   while (ptr_s < end_source)
-   {
-      // Compress \r\n\s+ to \t
-      if (*ptr_s == '\r')
-      {
-         *ptr_t = '\t';
-         ++ptr_t;
-
-         while (isspace(*++ptr_s))
-            ;
-      }
-      else
-         *ptr_t++ = *ptr_s++;
-   }
-   *ptr_t = '\0';
-}
-
-/**
- * @brief Retrieves the headers, parsing them into discrete name/value pairs and sending to callback.
- */
 int send_pop_message_header(PopClosure *popc)
 {
    char buffer[1024];
-   int bytes_read;
+   memset(buffer, 0, sizeof(buffer));
 
-   HeaderField *head = NULL, *tail = NULL, *cur;
-
-   const char *name, *value, *ptr, *line;
-   int name_len, value_len;
-
-   const char *end_of_buffer;
-   char *work;
-
-   int bytes_to_advance;
-
-   // Borrow buffer to convert the integer to a string for the TOP command
+   // We must send a request first because init_buff_control()
+   // makes an initial call to read the socket, which is empty
+   // until we send a TOP command.
    mcb_itoa_buff(popc->message_index+1, 10, buffer, sizeof(buffer));
    mcb_send_data(popc->parcel, "TOP ", buffer, " 0", NULL);
 
-   while ((bytes_read = mcb_recv_data(popc->parcel, buffer, sizeof(buffer))) > 0)
+   BuffControl bc;
+   init_buff_control(&bc,
+                     buffer, 
+                     sizeof(buffer),
+                     STalkerReader,
+                     (void*)popc->parcel->stalker);
+
+   // Variables whose pointers are passed to get_bc_line()
+   const char *line;
+   int line_len;
+
+   // Variables whose pointers are passed to parse_pop_line()
+   const char *name, *value;
+   int name_len, value_len;
+
+   // non-const placeholders in which strings can be initialized
+   char *tname, *tvalue;
+
+   // Header Field Chain links:
+   HeaderField *froot = NULL, *ftail = NULL, *fcur = NULL;
+   FieldValue *vtail = NULL, *vcur = NULL;
+
+  // We haven't yet read the response to the TOP message.
+   int message_confirmed = 0;
+
+   while(get_bc_line(&bc, &line, &line_len))
    {
-      end_of_buffer = &buffer[bytes_read];
-      line = ptr = buffer;
+      // We're only collecting header fields, so at the
+      // first signal the header ends (an empty line or
+      // a single period), break out of the while-loop.
+      if (line_len == 0 || (line_len == 1 && *line == '.'))
+         break;
 
-      while (line < end_of_buffer)
+      // Process first line after TOP message sent:
+      if (!message_confirmed)
       {
-         bytes_to_advance = parse_header_field(line,
-                                               end_of_buffer,
-                                               &name,
-                                               &name_len,
-                                               &value,
-                                               &value_len);
-
-         if (!popc->message_confirmed)
+         // We are abandoning the message, so we can trash
+         // the buffer in order to send the message.
+         if (*line == '-')
          {
-            if (*line == '-')
-            {
-               mcb_log_message(popc->parcel, "Unexpected failure for TOP: \"", line, "\"", NULL);
-               goto abort_processing;
-            }
-            else if (*line != '+')
-            {
-               mcb_log_message(popc->parcel, "Unexpected confirmation line, \"", line, "\"", NULL);
-            }
+            log_pop_closure_message(popc,
+                                    "Unexpected failure response ('-') after TOP request.");
+            goto purge_response_return_error;
+         }
+         else if (*line != '+')
+         {
+            log_pop_closure_message(popc,
+                                    "Unexpected response prefix (not '-' or '+') after TOP request.");
+            goto purge_response_return_error;
+         }
+          
+         message_confirmed = 1;
+         continue;
+      }
+      else  // message_confirmed
+      {
+         parse_pop_line(line, &line[line_len], &name, &name_len, &value, &value_len);
 
-            popc->message_confirmed = 1;
+         if (name_len)
+         {
+            // Create and initialize an empty Headerfield
+            fcur = (HeaderField*)alloca(sizeof(HeaderField));
+            memset(fcur, 0, sizeof(HeaderField));
+
+            // Make non-const string to initialize its value
+            tname = (char*)alloca(name_len+1);
+            memcpy(tname, name, name_len);
+            tname[name_len] = '\0';
+
+            // Attach non-const char* to const char* struct member:
+            fcur->name = tname;
+
+            // Attach new link to chain (or to root)
+            if (ftail)
+            {
+               ftail->next = fcur;
+               ftail = fcur;
+            }
+            else
+               froot = ftail = fcur;
+
+            // Establishing a new field means previous value chain is invalid:
+            vcur = vtail = NULL;
          }
 
-         if (name)
+         if (value_len)
          {
-            if (value)
+            if (vtail)
             {
-               cur = (HeaderField*)alloca(sizeof(HeaderField));
-               memset(cur, 0, sizeof(HeaderField));
-
-               work = (char*)alloca(name_len+1);
-               memcpy(work, name, name_len);
-               work[name_len] = '\0';
-
-               cur->name = work;
-
-               work = (char*)alloca(value_len);
-               copy_trimmed_email_field_value(work, value, value_len);
-               cur->value = work;
-
-               if (tail)
-               {
-                  tail->next = cur;
-                  tail = cur;
-               }
-               else
-                  head = tail = cur;
+               vcur = (FieldValue*)alloca(sizeof(FieldValue));
+               vtail->next = vcur;
+               vtail = vcur;
             }
-            else if (0 == strncmp(name, "+OK", 3))
-            {
-               ; // ignore status line
-            }
-            else  // Incomplete field, shift and continue reading
-            {
-               memmove(buffer, line, bytes_to_advance);
-               bytes_read = mcb_recv_data(popc->parcel,
-                                          &buffer[bytes_to_advance],
-                                          sizeof(buffer)-bytes_to_advance);
+            else
+               vcur = &fcur->value;
 
-               end_of_buffer = &buffer[bytes_read + bytes_to_advance];
-               line = ptr = buffer;
+            tvalue = (char*)alloca(value_len+1);
+            memcpy(tvalue, value, value_len);
+            tvalue[value_len] = '\0';
 
-               // Bypass update
-               continue;
-            }
+            vcur->value = tvalue;
          }
+      } // if message_confirmed
+   } // end of while(get_bc_line())
 
-         line += bytes_to_advance;
-      } // while (line < end_of_buffer)
-   }  // while bytes_read > 0
+   // purge response
+   while(get_bc_line(&bc, &line, &line_len))
+      ;
 
-   assert(popc->parcel->pop_message_receiver);
-   return (*popc->parcel->pop_message_receiver)(popc, head);
+   // execute the callback
+   PopMessageUser pmu = popc->parcel->pop_message_receiver;
+   if (pmu)
+      return (*pmu)(popc, froot, &bc);
+   else
+      return 1;
 
-  abort_processing:
+  purge_response_return_error:
+   // read until end-of-transmission
+   while(get_bc_line(&bc, &line, &line_len))
+      ;
+
    return 0;
 }
-
-
 
 /**
  * @brief Writes arguments (const char*s following MParcel*, terminated by NULL)
@@ -1030,17 +1015,14 @@ void mcb_greet_pop_server(MParcel *parcel)
 
             while (popc.message_index < popc.message_count)
             {
-               mcb_advise_message(parcel, "Processing an email.", NULL);
-               popc.message_confirmed = 0;
                if (send_pop_message_header(&popc))
                   ++popc.message_index;
                else
                   break;
             }
 
-            printf("POP server has %d messages, for a total of %d total bytes.\n",
-                   popc.message_count,
-                   popc.inbox_size);
+            if (popc.message_index < popc.message_count)
+               mcb_log_message(parcel, "Early termination of email retrieval.", NULL);
          }
       }
    }

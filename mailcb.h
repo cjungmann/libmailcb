@@ -3,15 +3,22 @@
 
 #include <sys/types.h>
 #include "socktalk.h"
+#include "buffread.h"
 
 // prototype for MParcel to be used for function pointer
 struct _comm_parcel;
 struct _pop_closure;
 
+typedef struct _field_value
+{
+   const char *value;
+   struct _field_value *next;
+} FieldValue;
+
 typedef struct _header_field
 {
-   const char *name;
-   const char *value;
+   const char  *name;
+   FieldValue value;
    struct _header_field *next;
 } HeaderField;
 
@@ -19,12 +26,15 @@ typedef void (*ServerReady)(struct _comm_parcel *parcel);
 
 typedef int (*NextPOPMessageHeader)(struct _comm_parcel *parcel, struct _pop_closure *pop_closure );
 
+
 /**
  * @brief The POP message handler will call this function for every message on the server.
  *
  * @return 1 to continue receiving messages, 0 to signal library to stop sending messages.
  */
-typedef int (*PopPushedMessage)(struct _pop_closure *pop_closure, const HeaderField *fields);
+typedef int (*PopMessageUser)(struct _pop_closure *pop_closure,
+                              const HeaderField *fields,
+                              BuffControl *bc);
 
 typedef struct _smtp_args
 {
@@ -41,7 +51,6 @@ typedef struct _pop_closure
    int message_count;
    int inbox_size;
    int message_index;
-   int message_confirmed;
 } PopClosure;
 
 
@@ -109,7 +118,7 @@ typedef struct _comm_parcel
 
    ServerReady callback_func;
 
-   PopPushedMessage pop_message_receiver;
+   PopMessageUser pop_message_receiver;
 
 } MParcel;
 

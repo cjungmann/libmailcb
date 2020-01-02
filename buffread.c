@@ -144,7 +144,7 @@ int get_bc_line(BuffControl *bc, const char **line, int *line_len)
 {
    const char *end_of_line, *start_of_next_line;
 
-   // Previous call signals no more lines available
+   // Check for signal that no more lines are available
    if (bc->cur_line == NULL)
    {
       *line = NULL;
@@ -167,6 +167,10 @@ int get_bc_line(BuffControl *bc, const char **line, int *line_len)
       {
          *line = bc->cur_line;
          *line_len = end_of_line - bc->cur_line;
+
+         // If reached the end of the message:
+         if (*line_len==1 && **line=='.')
+            bc->reached_EOF = 1;
 
          if (bc->reached_EOF)
             bc->cur_line = NULL;

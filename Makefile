@@ -27,7 +27,7 @@ mailer : mailer.c libmailcb.so mailcb.h
 debug: libmailcb.c mailcb.h mailcb_internal.h socktalk.c socktalk.h buffread.c buffread.h commparcel.c commparcel.h mailer.c
 	$(CC) $(LIB_CFLAGS) -c -o socktalkd.o socktalk.c
 	$(CC) $(LIB_CFLAGS) -c -o buffreadd.o buffread.c
-	$(CC) $(LIB_CFLAGS) -o libmailcbd.so socktalkd.o libmailcb.c -lssl -lcrypto -lcode64
+	$(CC) $(LIB_CFLAGS) -o libmailcbd.so socktalkd.o buffreadd.o libmailcb.c -lssl -lcrypto -lcode64
 	$(CC) $(BASEFLAGS) -L. -o mailerd mailer.c $(LOCAL_LINK)d -lreadini
 
 install :

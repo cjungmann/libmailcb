@@ -287,8 +287,6 @@ void emails_from_file(MParcel *parcel)
 
 
 
-
-
 int update_if_needed(const char *name, const ri_Line *line, const char **target, const MParcel *parcel)
 {
    if (*target == NULL)
@@ -387,32 +385,60 @@ void begin_smtp_conversation(MParcel *parcel)
 /**
  * @brief Callback function for processing pop headers.  For parcel->pop_message_receiver.
  */
-int pop_message_receiver(PopClosure *popc, const HeaderField *fields)
+int pop_message_receiver(PopClosure *popc, const HeaderField *fields, BuffControl *bc)
 {
-   const HeaderField *ptr;
-   int str_len,  max_name_len = 0;
+   const HeaderField *fptr;
+   const FieldValue *vptr;
+   int str_len, max_name_len = 0;
 
-   ptr = fields;
-   while (ptr)
+   // Write progress to stderr to keep user informed
+   fprintf(stderr,
+           "[33;1mReading message %4d of %4d.[m\r",
+           popc->message_index+1,
+           popc->message_count);
+
+   // Header for each email:
+   printf("### Message %4d of %4d.\n",
+          popc->message_index+1,
+          popc->message_count);
+
+   fptr = fields;
+   while (fptr)
    {
-      str_len = strlen(ptr->name);
+      str_len = strlen(fptr->name);
       if (str_len > max_name_len)
          max_name_len = str_len;
 
-      ptr = ptr->next;
+      fptr = fptr->next;
    }
 
-
-
-   printf("\n[34;1m");
-   printf("Max name length is %d.\n", max_name_len);
-   ptr = fields;
-   while (ptr)
+   /* printf("\n[34;1m"); */
+   fptr = fields;
+   while (fptr)
    {
-      printf("%*s: %s\n", max_name_len, ptr->name, ptr->value);
-      ptr = ptr->next;
+      printf("%*s: ", max_name_len, fptr->name);
+
+      vptr = &fptr->value;
+
+      while (vptr)
+      {
+         if (vptr->value)
+         {
+            // Spaces to line if on a field value continuation
+            if (vptr != &fptr->value)
+               printf("%*s  ", max_name_len, "  ");
+
+            // puts adds a newline, don't add another!
+            puts(vptr->value);
+         }
+
+         vptr = vptr->next;
+      }
+
+      fptr = fptr->next;
    }
-   printf("[m\n");
+   /* printf("[m\n"); */
+
    return 1;
 }
 

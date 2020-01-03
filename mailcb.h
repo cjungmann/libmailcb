@@ -11,14 +11,14 @@ struct _pop_closure;
 
 typedef struct _field_value
 {
-   const char *value;
+   const char          *value;
    struct _field_value *next;
 } FieldValue;
 
 typedef struct _header_field
 {
-   const char  *name;
-   FieldValue value;
+   const char           *name;
+   FieldValue           value;
    struct _header_field *next;
 } HeaderField;
 
@@ -41,16 +41,16 @@ typedef struct _smtp_args
    const char *host;
    const char *login;
    const char *password;
-   int port;
-   int use_tls;
+   int        port;
+   int        use_tls;
 } SmtpArgs;
 
 typedef struct _pop_closure
 {
    struct _comm_parcel *parcel;
-   int message_count;
-   int inbox_size;
-   int message_index;
+   int                 message_count;
+   int                 inbox_size;
+   int                 message_index;
 } PopClosure;
 
 

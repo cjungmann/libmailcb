@@ -80,44 +80,43 @@ typedef struct _smtp_caps
 
 typedef struct _comm_parcel
 {
+   /** [..] enclosed config file (if open) name of section containing connection details. */
+   const char *account;
+
+   /** Hook on which to attach application-specific data for access in callback functions. */
+   void *data;
+
    /** Details for making the mail connection. */
    const char *host_url;
    int host_port;
    int starttls;
 
-   int pop_reader;
-
-   /** Tracking variables */
-   int total_sent;
-   int total_read;
-
-   /** SMTP server login credentials */
+   /** account login credentials */
    const char *login;
    const char *password;
 
-   /** for FROM: field in outgoing emails. */
-   const char *from;
+   /** Function pointer used after a session has been started and authorized. */
+   ServerReady callback_func;
 
-   /** Points to a config file section from which connection information can be read. */
-   const char *account;   // Only used if a config file had been opened.
+   /** Server communication conduit.  Provides either SSL or !SSL communication */
+   STalker *stalker;
 
-   /** Reporting fields */
+   /** Data transfer tracking maintained by STalker */
+   int total_sent;
+   int total_read;
+
+   /** Message and logging flags and targets */
    int verbose;
    int quiet;
    const char *logfilepath;
    FILE *logfile;
 
-   /** Server communication conduit */
-   STalker *stalker;
+   /** SMTP operations variables */
+   const char *from;   // from field in SMTP envelope
+   SmtpCaps caps;      // SMTP capabilities as reported by EHLO response
 
-   /** Enclosed struct to make it easier to clear for multiple settings. */
-   SmtpCaps caps;
-
-   /** User-discretion pointer */
-   void *data;
-
-   ServerReady callback_func;
-
+   /** POP operations variables */
+   int pop_reader;
    PopMessageUser pop_message_receiver;
 
 } MParcel;

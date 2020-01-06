@@ -5,6 +5,14 @@
 #include "mailcb.h"
 #include <readini.h>
 
+#define SECTION_DELIM '\v'
+#define MESSAGE_DELIM '\f'
+
+int end_of_email_message(const char *line, int line_len)
+{
+   return (line_len == 1 && *line == MESSAGE_DELIM);
+}
+
 typedef struct _mailer_data
 {
    int  read_file;
@@ -16,8 +24,6 @@ typedef struct _line_link
    const char *line_str;
    struct _line_link *next;
 } LineLink;
-
-
 
 void send_the_email(MParcel *parcel, LineLink *recipients, LineLink *headers, LineLink *body)
 {
@@ -114,7 +120,7 @@ void send_the_email(MParcel *parcel, LineLink *recipients, LineLink *headers, Li
  *
  * If no end-line can be detected, the function returns -1
  *
- * The calling function is responsible for skipping past the
+* The calling function is responsible for skipping past the
  * line-terminator character(s).
  */
 int detect_line(const char *source, const char *end)
@@ -129,7 +135,200 @@ int detect_line(const char *source, const char *end)
       return ptr - source;
 }
 
+
+/**
+ * @brief Send parsed email
+ *
+ * Separated out of email_from_file_read_headers() to provide a shortcut
+ * that bypasses email_from_file_read_headers().
+ */
+void email_from_file_final_send(MParcel *parcel,
+                                BuffControl *bc,
+                                RecipLink *recips,
+                                const HeaderField *headers)
+{
+   mcb_send_email_new(parcel, recips, headers, bc, end_of_email_message);
+}
+
+/**
+ * @brief Continue email file parsing after reading recipients.
+ */
+void email_from_file_read_headers(MParcel *parcel, BuffControl *bc, RecipLink *recips)
+{
+   const char *line;
+   int line_len;
+
+   const char *name, *value;
+   int name_len, value_len;
+
+   char *tline;
+
+   HeaderField *h_root = NULL, *h_tail = NULL, *h_cur;
+   FieldValue *v_tail = NULL, *v_cur;
+
+   while (get_bc_line(bc, &line, &line_len))
+   {
+      if (line_len == 1 && (*line == MESSAGE_DELIM || *line == SECTION_DELIM))
+         break;
+
+      // Split line into name/value parts
+      mcb_parse_header_line(line, &line[line_len], &name, &name_len, &value, &value_len);
+
+      if (name_len)
+      {
+         // Make empty link
+         h_cur = (HeaderField*)alloca(sizeof(HeaderField));
+         memset(h_cur, 0, sizeof(HeaderField));
+
+         // Attach link to chain
+         if (h_tail)
+         {
+            h_tail->next = h_cur;
+            h_tail = h_cur;
+         }
+         else
+            h_root = h_tail = h_cur;
+
+         tline = (char*)alloca(name_len+1);
+         memcpy(tline, line, name_len);
+         tline[name_len] = '\0';
+         h_cur->name = tline;
+
+         v_cur = NULL;
+      }
+
+      if (value_len && h_cur)
+      {
+         if (v_tail)
+         {
+            v_cur = (FieldValue*)alloca(sizeof(FieldValue));
+            v_tail->next = v_cur;
+            v_tail = v_cur;
+         }
+         else
+            v_cur = &h_cur->value;
+
+         tline = (char*)alloca(value_len+1);
+         memcpy(tline, line, value_len);
+         tline[name_len] = '\0';
+         v_cur->value = tline;
+      }
+   }
+
+   email_from_file_final_send(parcel, bc, recips, h_root);
+}
+
+/**
+ * @brief Commence processing email by collecting recipients.
+ */
+void email_from_file_read_recipients(MParcel *parcel, BuffControl *bc)
+{
+   const char *line;
+   int line_len;
+
+   char *tline;
+
+   RecipLink *rl_root = NULL, *rl_tail = NULL, *rl_cur;
+
+   while (get_bc_line(bc, &line, &line_len))
+   {
+      if (line_len == 1 && (*line == SECTION_DELIM  || *line == MESSAGE_DELIM))
+         break;
+
+      // Make empty link
+      rl_cur = (RecipLink*)alloca(sizeof(RecipLink));
+      memset(rl_cur, 0, sizeof(RecipLink));
+
+      // Attach link to chain
+      if (rl_tail)
+      {
+         rl_tail->next = rl_cur;
+         rl_tail = rl_cur;
+      }
+      else
+         rl_root = rl_tail = rl_cur;
+
+      // Set link member values
+      switch(*line)
+      {
+         case '+':
+            rl_cur->rtype = RT_CC;
+            break;
+         case '-':
+            rl_cur->rtype = RT_BCC;
+            break;
+         case '#':
+            rl_cur->rtype = RT_SKIP;
+            break;
+      }
+
+      if (rl_cur->rtype)
+      {
+         --line_len;
+         tline = (char*)alloca(line_len+1);
+         memcpy(tline, line+1, line_len);
+      }
+      else
+      {
+         tline = (char*)alloca(line_len+1);
+         memcpy(tline, line, line_len);
+      }
+
+      tline[line_len] = '\0';
+      rl_cur->address = tline;
+   }
+
+   if (line_len == 1)
+   {
+      if (*line == SECTION_DELIM)
+         email_from_file_read_headers(parcel, bc, rl_root);
+      else if (*line == MESSAGE_DELIM)
+         email_from_file_final_send(parcel, bc, rl_root, NULL);
+   }
+   // If premature exit, warn and return without sending:
+   else if (line_len == 0)
+      mcb_log_message(parcel, "Incomplete email not sent.", NULL);
+   else
+      mcb_log_message(parcel, "Unexpected exit from recipient-reading loop.", NULL);
+}
+
+void report_recipients(MParcel *parcel, RecipLink *rchain)
+{
+   if (parcel->verbose)
+   {
+      int cur_len, max_len = 0;
+      RecipLink *ptr = rchain;
+      while (ptr)
+      {
+         cur_len = strlen(ptr->address);
+         if (cur_len > max_len)
+            max_len = cur_len;
+
+         ptr = ptr->next;
+      }
+
+      ptr = rchain;
+      while (ptr)
+      {
+         printf("%*s: %d.\n", max_len, ptr->address, ptr->rcpt_status);
+         ptr = ptr->next;
+      }
+   }
+}
+
 void emails_from_file(MParcel *parcel)
+{
+   FILE *efile = ((MailerData*)parcel->data)->file_to_read;
+   char buffer[1024];
+
+   BuffControl bc;
+   init_buff_control(&bc, buffer, sizeof(buffer), bc_file_reader, (void*)efile);
+
+   email_from_file_read_recipients(parcel, &bc);
+}
+
+
+void emails_from_file_old(MParcel *parcel)
 {
    FILE *efile = ((MailerData*)parcel->data)->file_to_read;
 
@@ -216,17 +415,17 @@ void emails_from_file(MParcel *parcel)
          while (line < end && (*line == '\r' || *line == '\n'))
             ++line;
 
-         // If end of recipients or headers section (marked by \v),
+         // If end of recipients or headers section (marked by SECTION_DELIM),
          // clear *tail to trigger next operation
          if (line < end)
          {
             // vertical tab between sections, form-feed between emails
-            if (*line == '\v' || *line == '\f')
+            if (*line == SECTION_DELIM || *line == MESSAGE_DELIM)
             {
                // Advance the content state (recipients, headers, body)
                ++content_state;
 
-               // Ignore the \v or \f, once detected
+               // Ignore the SECTION_DELIM or MESSAGE_DELIM, once detected
                ++line;
                tail = NULL;
             }
@@ -254,8 +453,8 @@ void emails_from_file(MParcel *parcel)
 
    // fread has exhausted the input file, we're done.
 
-   // Send email-in-process if complete the terminating \f
-   // was omitted and the email includes a body:
+   // Send email-in-process if complete the terminating
+   // MESSAGE_DELIM  was omitted and the email includes a body:
    if (content_state > 2)
       send_the_email(parcel, recipients, headers, body);
 }
@@ -299,43 +498,6 @@ int update_if_needed(const char *name, const ri_Line *line, const char **target,
    return 0;
 }
 
-void server_notice_html(MParcel *parcel)
-{
-   mcb_send_email(parcel,
-                  // Recipients:
-                  (const char*[]){"chuck@cpjj.net", "chuckjungmann@gmail.com", NULL},
-                  // Headers
-                  (const char*[]){"Subject: SMTP Server Debugging with HTML message",
-                        "MIME-Version: 1.0",
-                        "Content-Type: text/html; charset=\"UTF-8\"",
-                        NULL},
-                  // Message body
-                  "<html>\n"
-                  "<body>\n"
-                  "<p>\n"
-                  "</p>\n"
-                  "The message is required in order to make a complete email\n"
-                  "package.  Please don't misinterpret my intentions.  I only\n"
-                  "want to test a bulk email sender.\n"
-                  "</body>\n"
-                  "</html>");
-}
-
-void server_notice_text(MParcel *parcel)
-{
-   mcb_send_email(parcel,
-                  // Recipients:
-                  (const char*[]){"chuck@cpjj.net", NULL},
-                  // Headers:
-                  (const char*[]){"Subject: SMTP Server Debugging", NULL},
-                  // Message:
-                  "The message is required in order to make a complete email\n"
-                  "package.  Please don't misinterpret my intentions.  I only\n"
-                  "want to test a bulk email sender.");
-}
-
-
-
 
 
 
@@ -370,20 +532,21 @@ void begin_smtp_conversation(MParcel *parcel)
 {
    if (mcb_authorize_smtp_session(parcel))
    {
+      parcel->report_recipients = report_recipients;
+
       if (((MailerData*)parcel->data)->read_file)
-      {
          emails_from_file(parcel);
-      }
       else
-      {
-         server_notice_text(parcel);
-         server_notice_html(parcel);
-      }
+         mcb_log_message(parcel, "No file from which to read emails.", NULL);
    }
+   else
+      mcb_log_message(parcel, "SMTP session authorization failed.", NULL);
 }
 
 /**
  * @brief Callback function for processing pop headers.  For parcel->pop_message_receiver.
+ *
+ * We get here if popc->parcel->pop_reader!=0 && popc->parcel->pop_message_receiver!=NULL
  */
 int pop_message_receiver(PopClosure *popc, const HeaderField *fields, BuffControl *bc)
 {
@@ -442,6 +605,9 @@ int pop_message_receiver(PopClosure *popc, const HeaderField *fields, BuffContro
    return 1;
 }
 
+/**
+ * @brief Begins task after processing CLI arguments and .conf file settings
+ */
 void talker_user(MParcel *parcel)
 {
    mcb_advise_message(parcel, "Entered the talker_user function.", NULL);
@@ -562,13 +728,25 @@ int main(int argc, const char** argv)
 
    // Advise access to help if command called with no arguments:
    if (argc == 1)
+   {
       printf("-? for help.\n");
+      goto abort_program;
+   }
 
    while (cur_arg < end_arg)
    {
       str = *cur_arg;
+
       if (*str == '-')
       {
+         // If the argument is a single '-':
+         if (*(str+1) == '\0')
+         {
+            input_file_path = "-";
+            md.read_file = 1;
+            goto continue_next_arg;
+         }
+
          while (*++str)
          {
             switch(*str)
@@ -681,7 +859,7 @@ int main(int argc, const char** argv)
             return 1;
          }
       }
-   }
+   } // end of while (cur_arg < end_arg)
 
 
    int access_result;

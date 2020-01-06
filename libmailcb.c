@@ -30,11 +30,6 @@ CapString capstrings[] = {
 int capstrings_count = sizeof(capstrings) / sizeof(CapString);
 const CapString *capstring_end = &capstrings[sizeof(capstrings) / sizeof(CapString)];
 
-size_t STalkerReader(void *stalker, char *buffer, int buffer_len)
-{
-   return stk_recv_line((STalker*)stalker, buffer, buffer_len);
-}
-
 /**
  * @brief Creates a readable message from SSL_get_error() for logging an error.
  */
@@ -292,6 +287,14 @@ void parse_smtp_capability_response(MParcel *parcel, const char *line, int line_
 }
 
 /**
+ * @brief Judges SMTP server response to RCPT_TO request.
+ */
+int rcpt_status_ok(const RecipLink *rlink)
+{
+   return rlink->rcpt_status >= 200 && rlink->rcpt_status < 300;
+}
+
+/**
  * @brief Set the MParcel::SmtpCaps with the SMTP server response.
  *
  * The buffer should contain the response from the SMTP after sending
@@ -337,18 +340,15 @@ void parse_smtp_greeting_response(MParcel *parcel, const char *buffer, int buffe
 }
 
 /**
- * @brief Internal function for mcb_send_email() to send an email envelope.
- *
- * @param recipients is an array of pointers to const char*, with a
- *                   final pointer to NULL to mark the end of the list.
+ * @brief Improved function that individually tracks address acceptance.
  */
-int send_envelope(MParcel *parcel, const char **recipients)
+int send_envelope_new(MParcel *parcel, RecipLink *recipients)
 {
    if (!recipients)
       return 0;
 
    char buffer[1024];
-   const char **ptr = recipients;
+   RecipLink *ptr = recipients;
    int bytes_read;
    int recipients_accepted = 0;
    int reply_status;
@@ -358,20 +358,31 @@ int send_envelope(MParcel *parcel, const char **recipients)
    reply_status = atoi(buffer);
    if (reply_status >= 200 && reply_status < 300)
    {
-      printf("env response: '%.*s'\n", bytes_read, buffer);
-
-      while (*ptr)
+      while (ptr)
       {
-         mcb_send_data(parcel, "RCPT TO: <", *ptr, ">", NULL);
-         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-         buffer[bytes_read] = '\0';
-         reply_status = atoi(buffer);
-         if (reply_status >= 200 && reply_status < 300)
-            ++recipients_accepted;
-         else
-            mcb_log_message(parcel, "Recipient, ", *ptr, ", was turned down by the server, ", buffer,  NULL);
+         if (ptr->rtype != RT_SKIP)
+         {
+            mcb_send_data(parcel, "RCPT TO: <", ptr->address, ">", NULL);
 
-         ++ptr;
+            bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+            buffer[bytes_read] = '\0';
+
+            reply_status = atoi(buffer);
+            ptr->rcpt_status = reply_status;
+
+            if (reply_status >= 200 && reply_status < 300)
+               ++recipients_accepted;
+            else
+               mcb_log_message(parcel,
+                               "Recipient, ",
+                               *ptr,
+                               ", was turned down by the server, \"",
+                               buffer,
+                               "\"",
+                               NULL);
+         }
+
+         ptr = ptr->next;
       }
 
       if (recipients_accepted)
@@ -405,30 +416,108 @@ int send_envelope(MParcel *parcel, const char **recipients)
 }
 
 /**
- * @brief Internal function for mcb_send_email() to send email headers.
+ * @brief Internal function for mcb_send_email_new() to send email headers.
  */
-int send_headers(MParcel *parcel, const char **recipients, const char **headers)
+int send_headers_new(MParcel *parcel, RecipLink *recipients, const HeaderField *headers)
 {
    if (!recipients)
       return 0;
 
-   const char **ptr = recipients;
+   RecipLink *rptr = recipients;
+
+   int to_count = 0;
+   int cc_count = 0;
+   int bcc_count = 0;
+   int needs_comma;
+
+   rptr = recipients;
+   while (rptr)
+   {
+      if (rptr->rcpt_status < 300)
+      {
+         switch(rptr->rtype)
+         {
+            case RT_TO:
+               ++to_count;
+               break;
+            case RT_CC:
+               ++cc_count;
+               break;
+            case RT_BCC:
+               ++bcc_count;
+               break;
+            case RT_SKIP:
+               break;
+         }
+      }
+      rptr = rptr->next;
+   }
 
    mcb_send_data(parcel, "From: ", parcel->from, NULL);
 
-   // Send all the recipients
-   while (*ptr)
+   // Send all the accepted To: recipients
+   if (to_count)
    {
-      mcb_send_data(parcel, "To: ", *ptr, NULL);
-      ++ptr;
+      mcb_send_unlined_data(parcel, "To: ");
+      rptr = recipients;
+      needs_comma = 0;
+      while (rptr)
+      {
+         if (rcpt_status_ok(rptr) && rptr->rtype == RT_TO)
+         {
+            if (needs_comma)
+               mcb_send_unlined_data(parcel, ", ");
+            else
+               needs_comma = 1;
+
+            mcb_send_unlined_data(parcel, rptr->address);
+         }
+
+         rptr = rptr->next;
+      }
+
+      mcb_send_data_endline(parcel);
+   }
+
+   // Send all the accepted CC: recipients
+   if (cc_count)
+   {
+      mcb_send_unlined_data(parcel, "Cc: ");
+      rptr = recipients;
+      needs_comma = 0;
+      while (rptr)
+      {
+         if (rcpt_status_ok(rptr) && rptr->rtype == RT_CC)
+         {
+            if (needs_comma)
+               mcb_send_unlined_data(parcel, ", ");
+            else
+               needs_comma = 1;
+
+            mcb_send_unlined_data(parcel, rptr->address);
+         }
+
+         rptr = rptr->next;
+      }
+
+      mcb_send_data_endline(parcel);
    }
 
    // Send all the headers
-   ptr = headers;
-   while (*ptr)
+   const HeaderField *hptr = headers;
+   const FieldValue *vptr;
+   while (hptr)
    {
-      mcb_send_data(parcel, *ptr, NULL);
-      ++ptr;
+      mcb_send_data(parcel, hptr->name, ": ", hptr->value.value, NULL);
+
+      vptr = hptr->value.next;
+      while (vptr)
+      {
+         mcb_send_data(parcel, "\t", vptr->value, NULL);
+         vptr = vptr->next;
+      }
+
+      hptr = hptr->next;
    }
 
    // Send blank line to terminate headers
@@ -436,6 +525,8 @@ int send_headers(MParcel *parcel, const char **recipients, const char **headers)
 
    return 1;
 }
+
+
 
 /**
  * @brief Returns 0 for error, 1 for success.
@@ -488,77 +579,6 @@ void parse_pop_stat(const char *buffer, int *count, int *inbox_size)
    }
 }
 
-void parse_pop_line(const char *buffer,
-                    const char *end,
-                    const char **name,
-                    int *name_len,
-                    const char **value,
-                    int *value_len)
-{
-   *name = *value = NULL;
-   *name_len = *value_len = 0;
-
-   // Progress flags
-   int done_with_name = 0;
-
-   // If the first character is a space, we're on a follow-on
-   // value.  There will be no name
-   if (isspace(*buffer))
-      done_with_name = 1;
-
-   const char *spaces;
-   const char *ptr = buffer;
-   while (ptr < end)
-   {
-      if (!done_with_name)
-      {
-         if (*ptr == ':')
-         {
-            *name = buffer;
-            spaces = ptr;
-
-            while (isspace(*--spaces))
-               ;
-
-            // spaces now points to the last character of the string,
-            // instead of the character just after.  We need to add
-            // one to the difference in order to make the value mean
-            // the same thing as elsewhere.
-            ++spaces;
-
-            *name_len = spaces - buffer;
-
-            done_with_name = 1;
-         }
-      }
-      // skip post-colon spaces to find beginning of value
-      else if (!isspace(*ptr))
-      {
-         *value = ptr;
-         break;
-      }
-
-      ++ptr;
-   }
-
-   if (done_with_name && *value)
-   {
-      // Walk back any trailing spaces
-      spaces = end;
-      while (isspace(*--spaces))
-         ;
-      // See comment about spaces above.
-      spaces++;
-
-      *value_len = spaces - *value;
-   }
-   else
-   {
-      *name = buffer;
-      *name_len = spaces - buffer;
-   }
-}
-
 int send_pop_message_header(PopClosure *popc)
 {
    char buffer[1024];
@@ -574,14 +594,14 @@ int send_pop_message_header(PopClosure *popc)
    init_buff_control(&bc,
                      buffer, 
                      sizeof(buffer),
-                     STalkerReader,
+                     mcb_talker_reader,
                      (void*)popc->parcel->stalker);
 
    // Variables whose pointers are passed to get_bc_line()
    const char *line;
    int line_len;
 
-   // Variables whose pointers are passed to parse_pop_line()
+   // Variables whose pointers are passed to mcb_parse_header_line()
    const char *name, *value;
    int name_len, value_len;
 
@@ -626,7 +646,7 @@ int send_pop_message_header(PopClosure *popc)
       }
       else  // message_confirmed
       {
-         parse_pop_line(line, &line[line_len], &name, &name_len, &value, &value_len);
+         mcb_parse_header_line(line, &line[line_len], &name, &name_len, &value, &value_len);
 
          if (name_len)
          {
@@ -741,6 +761,20 @@ void mcb_log_message(const MParcel *mp, ...)
    }
 }
 
+int mcb_send_unlined_data(MParcel *mp, const char *str)
+{
+   int bytes_sent;
+   mp->total_sent += bytes_sent = stk_simple_send_unlined(mp->stalker, str, strlen(str));
+   return bytes_sent;
+}
+
+int mcb_send_data_endline(MParcel *mp)
+{
+   int bytes_sent;
+   mp->total_sent += bytes_sent = stk_simple_send_unlined(mp->stalker, "\r\n", 2);
+   return bytes_sent;
+}
+
 int mcb_send_data(MParcel *mp, ...)
 {
    int bytes_sent = 0;
@@ -751,6 +785,13 @@ int mcb_send_data(MParcel *mp, ...)
 
    va_end(ap);
 
+   return bytes_sent;
+}
+
+int mcb_send_line(MParcel *mp, const char *line, int line_len)
+{
+   int bytes_sent = 0;
+   mp->total_sent += bytes_sent = stk_simple_send_line(mp->stalker, line, line_len);
    return bytes_sent;
 }
 
@@ -793,6 +834,14 @@ int mcb_itoa_buff(int value, int base, char *buffer, int buffer_len)
    }
    else
       return 0;
+}
+
+/**
+ * @brief Simple callback function for init_buff_control().
+ */
+size_t mcb_talker_reader(void *stalker, char *buffer, int buffer_len)
+{
+   return stk_recv_line((STalker*)stalker, buffer, buffer_len);
 }
 
 /**
@@ -847,6 +896,77 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
       }
 
       close(osocket);
+   }
+}
+
+void mcb_parse_header_line(const char *buffer,
+                           const char *end,
+                           const char **name,
+                           int *name_len,
+                           const char **value,
+                           int *value_len)
+{
+   *name = *value = NULL;
+   *name_len = *value_len = 0;
+
+   // Progress flags
+   int done_with_name = 0;
+
+   // If the first character is a space, we're on a follow-on
+   // value.  There will be no name
+   if (isspace(*buffer))
+      done_with_name = 1;
+
+   const char *spaces;
+   const char *ptr = buffer;
+   while (ptr < end)
+   {
+      if (!done_with_name)
+      {
+         if (*ptr == ':')
+         {
+            *name = buffer;
+            spaces = ptr;
+
+            while (isspace(*--spaces))
+               ;
+
+            // spaces now points to the last character of the string,
+            // instead of the character just after.  We need to add
+            // one to the difference in order to make the value mean
+            // the same thing as elsewhere.
+            ++spaces;
+
+            *name_len = spaces - buffer;
+
+            done_with_name = 1;
+         }
+      }
+      // skip post-colon spaces to find beginning of value
+      else if (!isspace(*ptr))
+      {
+         *value = ptr;
+         break;
+      }
+
+      ++ptr;
+   }
+
+   if (done_with_name && *value)
+   {
+      // Walk back any trailing spaces
+      spaces = end;
+      while (isspace(*--spaces))
+         ;
+      // See comment about spaces above.
+      spaces++;
+
+      *value_len = spaces - *value;
+   }
+   else
+   {
+      *name = buffer;
+      *name_len = spaces - buffer;
    }
 }
 
@@ -1028,56 +1148,48 @@ void mcb_greet_pop_server(MParcel *parcel)
    }
 }
 
-/**
- * Send an email through an established connection.
- *
- * @param recipients Null-terminated list of pointers to recipients
- *                   that will be included in the envelope (RCVT TO:)
- * @param headers    Null-terminated list of email headers to be
- *                   sent before the message.
- * @param msg        Text of message to be sent.
- */
-void mcb_send_email(MParcel *parcel,
-                    const char **recipients,
-                    const char **headers,
-                    const char *msg)
+void mcb_send_email_new(MParcel *parcel,
+                        RecipLink *recipients,
+                        const HeaderField *headers,
+                        BuffControl *bc,
+                        IsEndEmailMessage is_end_of_email)
 {
-   char buffer[1024];
-   int bytes_read;
-   int reply_status;
+   const char *line;
+   int        line_len;
 
-   if (send_envelope(parcel, recipients))
+   if (send_envelope_new(parcel, recipients))
    {
-      mcb_advise_message(parcel, "Server accepted the envelope.", NULL);
- 
-      if (send_headers(parcel, recipients, headers))
+      if (send_headers_new(parcel, recipients, headers))
       {
-         mcb_advise_message(parcel, "Server accepted the headers.", NULL);
- 
-         mcb_send_data(parcel, msg, NULL);
+         // Loop to read and send lines until end of message:
+         while (get_bc_line(bc, &line, &line_len))
+         {
+            if ((*is_end_of_email)(line, line_len))
+               break;
+            else
+               mcb_send_line(parcel, line, line_len);
+         }
+
          mcb_send_data(parcel, ".", NULL);
 
-         bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-         if (bytes_read > 0)
-         {
-            reply_status = atoi(buffer);
-            if (reply_status >=200 && reply_status < 300)
-               mcb_advise_message(parcel, "Message was sent to ", *recipients, ".", NULL);
-            else
-            {
-               buffer[bytes_read] = '\0';
-               mcb_log_message(parcel,
-                           "The message to ",
-                           *recipients,
-                           " failed, saying \"",
-                           buffer,
-                           "\"",
-                           NULL);
-            }
-         }
-         else
-            mcb_log_message(parcel, "The server failed to respond.", NULL);
+         goto bypass_flush_for_failure;
       }
+      else
+         mcb_log_message(parcel, "Headers not accepted.", NULL);
    }
+   else
+      mcb_log_message(parcel, "Envelope not accepted.", NULL);
+
+   // flush message after envelope or header failure:
+   while (get_bc_line(bc, &line, &line_len))
+      if ((*is_end_of_email)(line, line_len))
+         break;
+
+  bypass_flush_for_failure:
+   // Send recipients results even if envelope fails
+   // in case a RCPT_TO failure caused the envelope failure.
+   if (parcel->report_recipients)
+      (*parcel->report_recipients)(parcel, recipients);
 }
+
 

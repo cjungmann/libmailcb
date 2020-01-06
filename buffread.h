@@ -3,6 +3,8 @@
 
 typedef size_t (*BReader)(void *source, char *buffer, int chars_to_read);
 
+size_t bc_file_reader(void *filestream, char *buffer, int chars_to_read);
+
 typedef struct _buff_control
 {
    char *buffer;

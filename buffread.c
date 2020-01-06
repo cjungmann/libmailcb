@@ -14,6 +14,15 @@ const char *find_bc_start_of_next_line(const char *line_ending_char, const char 
 void read_into_bc_buffer(BuffControl *bc);
 
 /**
+ * @brief Simple implementation of BReader function pointer using a FILE*
+ */
+size_t bc_file_reader(void *filestream, char *buffer, int buffer_len)
+{
+   FILE *f = (FILE*)filestream;
+   return fread(buffer, 1, buffer_len, f);
+}
+
+/**
  * @brief Returns a pointer just past the last character of the line.
  *
  * The function considers character up to, but not including limit.
@@ -191,12 +200,6 @@ int get_bc_line(BuffControl *bc, const char **line, int *line_len)
 
 #include <stdlib.h>
 
-size_t file_reader(void *filestr, char *buffer, int buffer_len)
-{
-   FILE *f = (FILE*)filestr;
-   return fread(buffer, 1, buffer_len, f);
-}
-
 void read_the_file(BuffControl *bc)
 {
    const char *line;
@@ -221,7 +224,7 @@ int main(int argc, const char **argv)
       FILE *fstream = fopen(argv[1], "r");
       if (fstream)
       {
-         init_buff_control(&bc, buffer, sizeof(buffer), file_reader, (void*)fstream);
+         init_buff_control(&bc, buffer, sizeof(buffer), bc_file_reader, (void*)fstream);
 
          // Set for debugging, show timing and size of reads to stderr:
          /* bc.log_reads = 1; */

@@ -72,12 +72,13 @@ void init_sock_talker(struct _stalker* talker, int socket);
 /**
  * Functions that actually read or write using the STalker object.
  */
+size_t stk_simple_send_line(const struct _stalker* talker, const char *data, int data_len);
+size_t stk_simple_send_unlined(const struct _stalker* talker, const char *data, int data_len);
 size_t stk_vsend_line(const struct _stalker* talker, va_list args);
 size_t stk_send_line(const struct _stalker* talker, ...);
 size_t stk_recv_line(const struct _stalker* talker, void *buffer, int buff_len);
 /** Send text like std_send_line, read and check response before returning. */
 int stk_send_recv_line(const struct _stalker *talker, ...);
-
 
 /**
  * @brief Given a chain of Status_Line, return 1 if a given message can be found, 0 otherwise.

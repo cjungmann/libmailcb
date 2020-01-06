@@ -152,6 +152,27 @@ void init_sock_talker(struct _stalker* talker, int socket)
    talker->reader = stk_sock_reader;
 }
 
+/**
+ * @brief Sends data by char* and byte count.  To be paired with use of BuffControl object.
+ */
+size_t stk_simple_send_line(const struct _stalker* talker, const char *data, int data_len)
+{
+   size_t bytes_sent = (*talker->writer)(talker, data, data_len);
+   bytes_sent += (*talker->writer)(talker, "\r\n", 2);
+   return bytes_sent;
+}
+
+/**
+ * @brief Send raw string, without adding a newline. 
+ *
+ * This function is meant for building a line in multiple steps.
+ * The main example is creating a comma-separated To: header field.
+ */
+size_t stk_simple_send_unlined(const struct _stalker* talker, const char *data, int data_len)
+{
+   return (*talker->writer)(talker, data, data_len);
+}
+
 size_t stk_vsend_line(const struct _stalker* talker, va_list args)
 {
    size_t bytes_sent, total_bytes = 0;

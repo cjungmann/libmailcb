@@ -6,6 +6,34 @@ can be easily extended by including in other projects
 that will send and track emails sent through an already-setup
 SMTP session.
 
+## Dependencies
+
+The share library depends on two other libraries, **OpenSSL** and
+my own **code64**.  The **mailer** command additionally uses my
+**readini** project to read a configuration file.
+
+Install **OpenSSL** like this:
+
+~~~sh
+sudo apt-get install libssl-dev
+~~~
+
+My libraries should be cloned, built, and installed from my
+GitHub account:
+
+~~~sh
+clone https://www.github.com/cjungmann/code64
+clone https://www.github.com/cjungmann/readini
+
+cd code64
+make
+sudo make install
+
+cd ../readini
+make
+sudo make install
+~~~
+
 ## Sub Project *mailer*
 
 This small program uses the *libmailcb* library to send

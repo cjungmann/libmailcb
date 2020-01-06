@@ -1,6 +1,7 @@
 #include <stdarg.h>    // for va_arg, etc.
-
+#include <string.h>    // for memset, etc;
 #include "socktalk.h"
+
 
 int walk_status_reply(const char *str, int *status, const char** line, int *line_len)
 {

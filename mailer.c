@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <alloca.h>
 #include <unistd.h>    // for close() function
+#include <string.h>    // for memcpy, memset.
 
 #include "mailcb.h"
 #include <readini.h>

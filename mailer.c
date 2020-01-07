@@ -19,42 +19,144 @@ typedef struct _mailer_data
 } MailerData;
 
 
-/***********************************|**************************************/
-/*                      SMTP mail sender processing                       */
-/***********************************|**************************************/
+/*************************************************************************/
+/*                      SMTP mail sender processing                      */
+/*************************************************************************/
+
+void emails_from_file(MParcel *parcel);
+void collect_email_recipients(MParcel *parcel, BuffControl *bc);
+void collect_email_headers(MParcel *parcel, BuffControl *bc, RecipLink *recips);
+void email_from_file_final_send(MParcel *parcel, BuffControl *bc,
+                                RecipLink *recips, const HeaderField *headers);
+
+void report_recipients(MParcel *parcel, RecipLink *rchain);
+int end_of_email_message(const char *line, int line_len);
+
+
 /**
- * @brief Callback function that **mailcb** uses to detect the end of a message
+ * @brief The beginning of the three-step process of reading and sending emails.
+ *
+ * Each step involves a function that builds a data structure in stack
+ * memory, then calls the next step.  When the emails are complete, the
+ * memory is released as each function returns.
  */
-int end_of_email_message(const char *line, int line_len)
+void emails_from_file(MParcel *parcel)
 {
-   return (line_len == 1 && *line == MESSAGE_DELIM);
+   FILE *efile = ((MailerData*)parcel->data)->file_to_read;
+   char buffer[1024];
+
+   BuffControl bc;
+   init_buff_control(&bc, buffer, sizeof(buffer), bc_file_reader, (void*)efile);
+
+   while (!bc.reached_EOF)
+      collect_email_recipients(parcel, &bc);
 }
 
 /**
- * @brief Send parsed email
- *
- * Separated out of collect_emailheaders() to provide a shortcut
- * that bypasses collect_email_headers().
+ * @brief Step 2 of emails_from_file() process.
  */
-void email_from_file_final_send(MParcel *parcel,
-                                BuffControl *bc,
-                                RecipLink *recips,
-                                const HeaderField *headers)
+void collect_email_recipients(MParcel *parcel, BuffControl *bc)
 {
-   printf("[36;1mPhantom sending of an email.[m\n");
-
    const char *line;
    int line_len;
 
-   while (get_bc_line(bc, &line, &line_len))
-      if ((*end_of_email_message)(line, line_len))
-         break;
+   char *tline;
 
-   /* mcb_send_email_new(parcel, recips, headers, bc, end_of_email_message); */
+   RecipLink *rl_root = NULL, *rl_tail = NULL, *rl_cur;
+   int recipient_count = 0;
+   int found_end_of_message = 0;
+
+   while (get_bc_line(bc, &line, &line_len))
+   {
+      if (line_len == 1 && (*line == SECTION_DELIM  || *line == MESSAGE_DELIM))
+      {
+         if (*line == MESSAGE_DELIM)
+            found_end_of_message = 1;
+
+         break;
+      }
+
+      // Add for all types here, subtract if *line=='#'
+      ++recipient_count;
+
+      // Make empty link
+      rl_cur = (RecipLink*)alloca(sizeof(RecipLink));
+      memset(rl_cur, 0, sizeof(RecipLink));
+
+      // Attach link to chain
+      if (rl_tail)
+      {
+         rl_tail->next = rl_cur;
+         rl_tail = rl_cur;
+      }
+      else
+         rl_root = rl_tail = rl_cur;
+
+      // Set link member values
+      switch(*line)
+      {
+         case '+':
+            rl_cur->rtype = RT_CC;
+            break;
+         case '-':
+            rl_cur->rtype = RT_BCC;
+            break;
+         case '#':
+            rl_cur->rtype = RT_SKIP;
+            --recipient_count;
+            break;
+         default:
+            // default value after memset struct to 0
+            break;
+      }
+
+      if (rl_cur->rtype)
+      {
+         --line_len;
+         tline = (char*)alloca(line_len+1);
+         memcpy(tline, line+1, line_len);
+      }
+      else
+      {
+         tline = (char*)alloca(line_len+1);
+         memcpy(tline, line, line_len);
+      }
+
+      tline[line_len] = '\0';
+      rl_cur->address = tline;
+   }
+
+   // Recipients collected, what's next?
+
+   if (recipient_count && line_len==1 && (*line==SECTION_DELIM || *line==MESSAGE_DELIM))
+   {
+         if (*line == SECTION_DELIM)
+            collect_email_headers(parcel, bc, rl_root);
+         else if (*line == MESSAGE_DELIM)
+            email_from_file_final_send(parcel, bc, rl_root, NULL);
+   }
+   else  // Message will not be sent
+   {
+      if (!recipient_count)
+         mcb_log_message(parcel, "No recipients for this email, which will now not be sent.", NULL);
+      // If premature exit, warn and return without sending:
+      else if (line_len == 0)
+         mcb_log_message(parcel, "Incomplete email, not sent.", NULL);
+      else
+         mcb_log_message(parcel, "Unexpected exit from recipient-reading loop.", NULL);
+      
+      // Flush the rest of the message, if any:
+      if (!found_end_of_message)
+      {
+         while (get_bc_line(bc, &line, &line_len))
+            if (line_len==1 && *line==MESSAGE_DELIM)
+               break;
+      }
+   }
 }
 
 /**
- * @brief Optional (but recommended) step 3 of emails_from_file()
+ * @brief Now having recipients, read any email headers into a HeaderField chain.
  */
 void collect_email_headers(MParcel *parcel, BuffControl *bc, RecipLink *recips)
 {
@@ -122,81 +224,39 @@ void collect_email_headers(MParcel *parcel, BuffControl *bc, RecipLink *recips)
 }
 
 /**
- * @brief Step 2 of emails_from_file() process.
+ * @brief Send parsed email
+ *
+ * Separated out of collect_emailheaders() to provide a shortcut
+ * that bypasses collect_email_headers().
  */
-void collect_email_recipients(MParcel *parcel, BuffControl *bc)
+void email_from_file_final_send(MParcel *parcel,
+                                BuffControl *bc,
+                                RecipLink *recips,
+                                const HeaderField *headers)
 {
+   printf("[36;1mPhantom sending of an email.[m\n");
+
    const char *line;
    int line_len;
 
-   char *tline;
-
-   RecipLink *rl_root = NULL, *rl_tail = NULL, *rl_cur;
-
    while (get_bc_line(bc, &line, &line_len))
-   {
-      if (line_len == 1 && (*line == SECTION_DELIM  || *line == MESSAGE_DELIM))
+      if ((*end_of_email_message)(line, line_len))
          break;
 
-      // Make empty link
-      rl_cur = (RecipLink*)alloca(sizeof(RecipLink));
-      memset(rl_cur, 0, sizeof(RecipLink));
-
-      // Attach link to chain
-      if (rl_tail)
-      {
-         rl_tail->next = rl_cur;
-         rl_tail = rl_cur;
-      }
-      else
-         rl_root = rl_tail = rl_cur;
-
-      // Set link member values
-      switch(*line)
-      {
-         case '+':
-            rl_cur->rtype = RT_CC;
-            break;
-         case '-':
-            rl_cur->rtype = RT_BCC;
-            break;
-         case '#':
-            rl_cur->rtype = RT_SKIP;
-            break;
-      }
-
-      if (rl_cur->rtype)
-      {
-         --line_len;
-         tline = (char*)alloca(line_len+1);
-         memcpy(tline, line+1, line_len);
-      }
-      else
-      {
-         tline = (char*)alloca(line_len+1);
-         memcpy(tline, line, line_len);
-      }
-
-      tline[line_len] = '\0';
-      rl_cur->address = tline;
-   }
-
-   if (line_len == 1)
-   {
-      if (*line == SECTION_DELIM)
-         collect_email_headers(parcel, bc, rl_root);
-      else if (*line == MESSAGE_DELIM)
-         email_from_file_final_send(parcel, bc, rl_root, NULL);
-   }
-   // If premature exit, warn and return without sending:
-   else if (line_len == 0)
-      mcb_log_message(parcel, "Incomplete email not sent.", NULL);
-   else
-      mcb_log_message(parcel, "Unexpected exit from recipient-reading loop.", NULL);
+   /* mcb_send_email_new(parcel, recips, headers, bc, end_of_email_message); */
 }
 
+/***********************************/
+/* Library SMTP Callback functions */
+/***********************************/
+
 /**
- * @brief Report the emailing results for each RCPT_TO address
+ * @brief Report the emailing results for each RCPT_TO address.
+ *
+ * This is a callback function that, if provided, the library calls
+ * after each email.  The RecipLink chain then contains the status
+ * of each address, whether it was accepted by the email server or
+ * not.
  */
 void report_recipients(MParcel *parcel, RecipLink *rchain)
 {
@@ -223,23 +283,14 @@ void report_recipients(MParcel *parcel, RecipLink *rchain)
 }
 
 /**
- * @brief The beginning of the three-step process of reading and sending emails.
- *
- * Each step involves a function that builds a data structure in stack
- * memory, then calls the next step.  When the emails are complete, the
- * memory is released as each function returns.
+ * @brief Callback function that **mailcb** uses to detect the end of a message
  */
-void emails_from_file(MParcel *parcel)
+int end_of_email_message(const char *line, int line_len)
 {
-   FILE *efile = ((MailerData*)parcel->data)->file_to_read;
-   char buffer[1024];
-
-   BuffControl bc;
-   init_buff_control(&bc, buffer, sizeof(buffer), bc_file_reader, (void*)efile);
-
-   while (!bc.reached_EOF)
-      collect_email_recipients(parcel, &bc);
+   return (line_len == 1 && *line == MESSAGE_DELIM);
 }
+
+
 
 
 void begin_smtp_conversation(MParcel *parcel)
@@ -343,8 +394,6 @@ int pop_message_receiver(PopClosure *popc, const HeaderField *fields, BuffContro
  */
 void talker_user(MParcel *parcel)
 {
-   mcb_advise_message(parcel, "Entered the talker_user function.", NULL);
-
    if (mcb_is_opening_smtp(parcel))
       begin_smtp_conversation(parcel);
    else

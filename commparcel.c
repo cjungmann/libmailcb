@@ -101,14 +101,9 @@ void set_auth(MParcel *mp, const char *line, int len)
          temp[ptr-cur] = '\0';
 
          if (curauth < authstring_end)
-         {
-            mcb_advise_message(mp, "registering auth protocol ", temp, ".", NULL);
             (*curauth->set_cap)(mp, cur, ptr-cur);
-         }
          else
-         {
             mcb_log_message(mp, "Unexpected authorization protocol: ", temp, ".", NULL);
-         }
 
          // Start next authorization protocol with character after the space:
          // Skip past the space:

@@ -186,9 +186,6 @@ void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user)
    SSL_load_error_strings();
 
    /* openssl_config(null); */
-
-   mcb_advise_message(parcel, "About to open SSL", NULL);
-
    SSL_library_init();
 
    method = SSLv23_client_method();
@@ -863,8 +860,6 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
    int osocket = get_connected_socket(host, port);
    if (osocket > 0)
    {
-      mcb_advise_message(parcel, "Got an open socket.", NULL);
-
       STalker talker;
       init_sock_talker(&talker, osocket);
       parcel->stalker = &talker;
@@ -889,11 +884,27 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
 
                mcb_send_data(parcel, "STARTTLS", NULL);
                bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-               buffer[bytes_read] = '\0';
-               mcb_advise_message(parcel, buffer, NULL);
-            }
+               if (bytes_read > 3)
+               {
+                  socket_response = atoi(buffer);
+                  if (socket_response >= 200 && socket_response < 300)
+                     open_ssl(parcel, osocket, talker_user);
+                  else
+                  {
+                     buffer[bytes_read] = '\0';
+                     mcb_log_message(parcel, "STARTTLS instruction failed \"", buffer, "\"", NULL);
+                  }
+               }
+               else
+                  mcb_log_message(parcel,
+                                  "mcb_recv_data failed to read necesssary server response.",
+                                  NULL);
 
-            open_ssl(parcel, osocket, talker_user);
+            }
+            else
+               mcb_log_message(parcel,
+                               "Requested TLS security, which the server doesn't supply.",
+                               NULL);
          }
          else
          {
@@ -1040,18 +1051,10 @@ int mcb_authorize_smtp_session(MParcel *parcel)
       if (reply_status >= 300 && reply_status < 400)
       {
          c64_encode_to_buffer(login, strlen(login), (uint32_t*)&buffer, sizeof(buffer));
-         mcb_advise_message(parcel,
-                        "Sending user name, ",
-                        login,
-                        ", encoded as ",
-                        buffer,
-                        ", to the server.",
-                        NULL);
 
          mcb_send_data(parcel, buffer, NULL);
          bytes_received = mcb_recv_data(parcel, buffer, sizeof(buffer));
          buffer[bytes_received] = '\0';
-
 
          // reply status in the 300 range (334) indicates
          // good so far, but need more inputx
@@ -1059,11 +1062,6 @@ int mcb_authorize_smtp_session(MParcel *parcel)
          if (reply_status >= 300 && reply_status < 400)
          {
             c64_encode_to_buffer(password, strlen(password), (uint32_t*)&buffer, sizeof(buffer));
-            mcb_advise_message(parcel,
-                           "Sending password, encoded as ",
-                           buffer,
-                           ", to the server.",
-                           NULL);
 
             mcb_send_data(parcel, buffer, NULL);
             bytes_received = mcb_recv_data(parcel, buffer, sizeof(buffer));

@@ -1,4 +1,4 @@
-BASEFLAGS = -Wall -Werror -m64
+BASEFLAGS = -Wall -Werror
 LIB_CFLAGS = ${BASEFLAGS} -I. -fPIC -shared
 
 LOCAL_LINK = -Wl,-R -Wl,. -lmailcb

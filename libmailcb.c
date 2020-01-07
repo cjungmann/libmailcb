@@ -857,6 +857,8 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
 
    char        buffer[1024];
    int         bytes_read;
+   int         socket_response;
+   int         smtp_socket_open = 0;
 
    int osocket = get_connected_socket(host, port);
    if (osocket > 0)
@@ -870,29 +872,39 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
       if (mcb_is_opening_smtp(parcel))
       {
          bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-         fprintf(stderr, "Socket response: \"%.*s\".\n", bytes_read, buffer);
-
-         initialize_smtp_session(parcel);
+         socket_response = atoi(buffer);
+         if (socket_response >= 200 && socket_response < 300)
+            smtp_socket_open = 1;
       }
 
-      if (parcel->starttls)
+      if (smtp_socket_open)
       {
-         if (parcel->caps.cap_starttls)
+         initialize_smtp_session(parcel);
+
+         if (parcel->starttls)
          {
-            mcb_advise_message(parcel, "Starting TLS", NULL);
+            if (parcel->caps.cap_starttls)
+            {
+               mcb_advise_message(parcel, "Starting TLS", NULL);
 
-            mcb_send_data(parcel, "STARTTLS", NULL);
-            bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-            buffer[bytes_read] = '\0';
-            mcb_advise_message(parcel, buffer, NULL);
+               mcb_send_data(parcel, "STARTTLS", NULL);
+               bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+               buffer[bytes_read] = '\0';
+               mcb_advise_message(parcel, buffer, NULL);
+            }
+
+            open_ssl(parcel, osocket, talker_user);
          }
-
-         open_ssl(parcel, osocket, talker_user);
+         else
+         {
+            // Not using SSL/TLS
+            (*talker_user)(parcel);
+         }
       }
       else
       {
-         // Not using SSL/TLS
-         (*talker_user)(parcel);
+         buffer[bytes_read] = '\0';
+         mcb_log_message(parcel, "Unexpected SMTP response: \"", buffer, "\"", NULL);
       }
 
       close(osocket);

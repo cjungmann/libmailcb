@@ -16,6 +16,7 @@ typedef struct _mailer_data
 {
    int  read_file;
    FILE *file_to_read;
+   int fake_emailing;
 } MailerData;
 
 
@@ -234,16 +235,22 @@ void email_from_file_final_send(MParcel *parcel,
                                 RecipLink *recips,
                                 const HeaderField *headers)
 {
-   printf("[36;1mPhantom sending of an email.[m\n");
+   const MailerData *md = (MailerData*)parcel->data;
 
-   const char *line;
-   int line_len;
+   if (md->fake_emailing)
+   {
+      printf("[36;1mPhantom sending of an email.[m\n");
 
-   while (get_bc_line(bc, &line, &line_len))
-      if ((*end_of_email_message)(line, line_len))
-         break;
+      const char *line;
+      int line_len;
 
-   /* mcb_send_email_new(parcel, recips, headers, bc, end_of_email_message); */
+      // flush to end-of-message
+      while (get_bc_line(bc, &line, &line_len))
+         if ((*end_of_email_message)(line, line_len))
+            break;
+   }
+   else
+      mcb_send_email_new(parcel, recips, headers, bc, end_of_email_message);
 }
 
 /***********************************/
@@ -512,6 +519,7 @@ void show_usage(void)
       "-p port number\n"
       "-r POP3 reader\n"
       "-q quiet, suppress error messages\n"
+      "-s skip sending of emails\n"
       "-t use TLS encryption\n"
       "-v generate verbose output\n"
       "-w password\n";
@@ -619,6 +627,9 @@ int main(int argc, const char** argv)
                   break;
                case 'q':  // quiet, suppress error messages
                   mparcel.quiet = 1;
+                  break;
+               case 's':
+                  md.fake_emailing = 1;
                   break;
                case 't':   // tls
                   mparcel.starttls = 1;

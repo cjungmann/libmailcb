@@ -36,9 +36,10 @@ sudo make install
 
 ## Sub Project *mailer*
 
-This small program uses the *libmailcb* library to send
-emails from the command line.  It's not complete yet, so
-some of the specifications are unfinished.
+This small program uses the *libmailcb* library to send emails
+from the command line.   It writes its output to *stdout*, and
+can be configured to read from *stdin* to make the command more
+than just an example program.
 
 ### Configuration file *mailer.conf*
 

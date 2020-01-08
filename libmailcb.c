@@ -876,55 +876,39 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
          bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
          socket_response = atoi(buffer);
          if (socket_response >= 200 && socket_response < 300)
+         {
             smtp_mode_socket = 1;
+            initialize_smtp_session(parcel);
+         }
       }
 
-      if (smtp_mode_socket)
+      if (parcel->starttls)
       {
-         initialize_smtp_session(parcel);
-
-         if (parcel->starttls)
+         // For SMTP using TLS, we must explicitly start tls
+         if (smtp_mode_socket && parcel->caps.cap_starttls)
          {
-            if (parcel->caps.cap_starttls)
-            {
-               mcb_advise_message(parcel, "Starting TLS", NULL);
+            mcb_advise_message(parcel, "Starting TLS", NULL);
 
-               mcb_send_data(parcel, "STARTTLS", NULL);
-               bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
-               if (bytes_read > 3)
-               {
-                  socket_response = atoi(buffer);
-                  if (socket_response >= 200 && socket_response < 300)
-                  {
-                     open_ssl(parcel, osocket, talker_user);
-                  }
-                  else
-                  {
-                     buffer[bytes_read] = '\0';
-                     mcb_log_message(parcel, "STARTTLS instruction failed \"", buffer, "\"", NULL);
-                  }
-               }
+            mcb_send_data(parcel, "STARTTLS", NULL);
+            bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
+            if (bytes_read > 3)
+            {
+               socket_response = atoi(buffer);
+               if (socket_response >= 200 && socket_response < 300)
+                  open_ssl(parcel, osocket, talker_user);
                else
                {
-                  mcb_log_message(parcel,
-                                  "mcb_recv_data failed to read necesssary server response.",
-                                  NULL);
+                  buffer[bytes_read] = '\0';
+                  mcb_log_message(parcel, "STARTTLS failed (", buffer, ")", NULL);
                }
             }
             else
-            {
-               mcb_log_message(parcel,
-                               "Requested TLS security, which the server doesn't supply.",
-                               NULL);
-            }
+               mcb_log_message(parcel, "Corrupt response to STARTTLS.", NULL);
          }
-         else
-         {
-            // Not using SSL/TLS
-            (*talker_user)(parcel);
-         }
+         else // Non-SMTP (ie POP) using TLS:
+            open_ssl(parcel, osocket, talker_user);
       }
-      else // not in SMTP mode (ie POP mode);
+      else // Not using TLS
          (*talker_user)(parcel);
 
       close(osocket);

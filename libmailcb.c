@@ -895,7 +895,13 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
             {
                socket_response = atoi(buffer);
                if (socket_response >= 200 && socket_response < 300)
+               {
+                  // For GMail, at least, the capabilities have changed,
+                  // so we'll reaquire them now.
+                  initialize_smtp_session(parcel);
+
                   open_ssl(parcel, osocket, talker_user);
+               }
                else
                {
                   buffer[bytes_read] = '\0';

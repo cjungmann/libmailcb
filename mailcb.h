@@ -157,8 +157,7 @@ int mcb_itoa_buff(int value, int base, char *buffer, int buffer_len);
 
 size_t mcb_talker_reader(void *stalker, char *buffer, int buffer_len);
 
-/** Mnemonic function to discern POP flag */
-int mcb_is_opening_smtp(const MParcel *parcel) { return !parcel->pop_reader; }
+int mcb_is_opening_smtp(const MParcel *parcel);
 
 void mcb_parse_header_line(const char *buffer,
                            const char *end,

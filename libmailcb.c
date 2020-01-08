@@ -841,11 +841,18 @@ size_t mcb_talker_reader(void *stalker, char *buffer, int buffer_len)
    return stk_recv_line((STalker*)stalker, buffer, buffer_len);
 }
 
+int mcb_is_opening_smtp(const MParcel *parcel)
+{
+  return !parcel->pop_reader;
+}
+
 /**
- * @brief Initialize connection with specified URL on specified port.  Initializes TLS if requested.
+ * @brief Initialize connection with specified URL on specified port.
+ *        Initializes TLS if requested.
  *
- * This function opens a socket, the opens SSL if requested.  In either case, a STalker
- * object is initialized and returned to the caller through the MParcel pointer.
+ * This function opens a socket, the opens SSL if requested.  In either
+ * case, a STalker object is initialized and returned to the caller
+ * through the MParcel pointer.
  */
 void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
 {
@@ -855,7 +862,7 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
    char        buffer[1024];
    int         bytes_read;
    int         socket_response;
-   int         smtp_socket_open = 0;
+   int         smtp_mode_socket = 0;
 
    int osocket = get_connected_socket(host, port);
    if (osocket > 0)
@@ -869,10 +876,10 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
          bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
          socket_response = atoi(buffer);
          if (socket_response >= 200 && socket_response < 300)
-            smtp_socket_open = 1;
+            smtp_mode_socket = 1;
       }
 
-      if (smtp_socket_open)
+      if (smtp_mode_socket)
       {
          initialize_smtp_session(parcel);
 
@@ -888,7 +895,9 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
                {
                   socket_response = atoi(buffer);
                   if (socket_response >= 200 && socket_response < 300)
+                  {
                      open_ssl(parcel, osocket, talker_user);
+                  }
                   else
                   {
                      buffer[bytes_read] = '\0';
@@ -896,15 +905,18 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
                   }
                }
                else
+               {
                   mcb_log_message(parcel,
                                   "mcb_recv_data failed to read necesssary server response.",
                                   NULL);
-
+               }
             }
             else
+            {
                mcb_log_message(parcel,
                                "Requested TLS security, which the server doesn't supply.",
                                NULL);
+            }
          }
          else
          {
@@ -912,11 +924,8 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
             (*talker_user)(parcel);
          }
       }
-      else
-      {
-         buffer[bytes_read] = '\0';
-         mcb_log_message(parcel, "Unexpected SMTP response: \"", buffer, "\"", NULL);
-      }
+      else // not in SMTP mode (ie POP mode);
+         (*talker_user)(parcel);
 
       close(osocket);
    }

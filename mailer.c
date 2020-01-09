@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <alloca.h>
-#include <unistd.h>    // for close() function
-#include <string.h>    // for memcpy, memset.
+#include <unistd.h>  // for close() function
+#include <string.h>  // for memcpy, memset.
 
 #include "mailcb.h"
 #include <readini.h>
@@ -507,6 +507,13 @@ void begin_after_read_config_attempt(const ri_Section *root, void* mparcel)
    mcb_prepare_talker(parcel, talker_user);
 }
 
+void write_guid(void)
+{
+   char buffer[37];
+   mcb_make_guid(buffer, sizeof(buffer));
+   puts(buffer);
+}
+
 void show_usage(void)
 {
    const char* text = 
@@ -514,6 +521,7 @@ void show_usage(void)
       "-c config file path\n"
       "-f from email address\n"
       "-h host url\n"
+      "-g generate version 4/variant 1 GUID\n"
       "-i email input file, '-' for stdin\n"
       "-l login name\n"
       "-p port number\n"
@@ -590,6 +598,10 @@ int main(int argc, const char** argv)
                      mparcel.from = *++cur_arg;
                      goto continue_next_arg;
                   }
+                  break;
+               case 'g':  // generate random number (guid?)
+                  write_guid();
+                  goto abort_program;
                   break;
                case 'h':  // host
                   if (cur_arg + 1 < end_arg)

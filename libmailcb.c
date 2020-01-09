@@ -31,6 +31,22 @@ int capstrings_count = sizeof(capstrings) / sizeof(CapString);
 const CapString *capstring_end = &capstrings[sizeof(capstrings) / sizeof(CapString)];
 
 /**
+ * @brief Convert uint8 value to two hex chars. Used by mcb_make_guid().
+ *
+ * The _*target_ parameter must point to memory large enough
+ * to contain the two hex chars that will be the result of
+ * the conversion.  No checking is possible.
+ */
+void hexify_digit(char *target, uint8_t value)
+{
+   int low16 = value % 16;
+   value /= 16;
+
+   *target++ = value<10 ? ('0' + value) : ((value-10) + 'a');
+   *target = low16<10 ? ('0' + low16) : ((low16-10) + 'a');
+}
+
+/**
  * @brief Creates a readable message from SSL_get_error() for logging an error.
  */
 void log_ssl_error(MParcel *parcel, const SSL *ssl, int ret)
@@ -81,13 +97,6 @@ void log_ssl_error(MParcel *parcel, const SSL *ssl, int ret)
 
       mcb_log_message(parcel, "Unrecognized SSL_get_error() response, \"", msg, "\"",  NULL);
    }
-}
-
-void log_pop_closure_message(const PopClosure *pc, const char *msg)
-{
-   char buffer[128];
-   sprintf(buffer, "At message %d of %d, ", pc->message_index, pc->message_count);
-   mcb_log_message(pc->parcel, buffer, msg, NULL);
 }
 
 /**
@@ -524,6 +533,15 @@ int send_headers_new(MParcel *parcel, RecipLink *recipients, const HeaderField *
 }
 
 
+/**
+ * @brief Convenience function to add context to POP error log.
+ */
+void log_pop_closure_message(const PopClosure *pc, const char *msg)
+{
+   char buffer[128];
+   sprintf(buffer, "At message %d of %d, ", pc->message_index, pc->message_count);
+   mcb_log_message(pc->parcel, buffer, msg, NULL);
+}
 
 /**
  * @brief Returns 0 for error, 1 for success.
@@ -832,6 +850,89 @@ int mcb_itoa_buff(int value, int base, char *buffer, int buffer_len)
    else
       return 0;
 }
+
+/**
+ * @brief Writes a GUID value to the guid_buffer.
+ *
+ * The required buffer length for a proper GUID, a 128-bit long
+ * hex value broken with hyphens into 5 sections, is 37 characters.
+ *
+ * -  32 characters for the 128-bits of random data
+ * - + 4 characters for the hyphens separating the sections,
+ * - + 1 for \0 terminator.
+ *
+ * The function returns 0 if it can't read 16 bytes from /dev/urandom
+ * or if *buffer_len* == 0 (no room for final \0).
+ * 
+ * The result will be truncated if the *buffer_len* parameter
+ * indicates that the buffer is too small.
+ *
+ * The last character in the *guid_buffer* will be set to \0, even
+ * if that means the last character will be left-off.
+ */
+int mcb_make_guid(char *guid_buffer, int buffer_len)
+{
+   char *tend = &guid_buffer[buffer_len];
+   char *tptr = guid_buffer;
+
+   if (buffer_len < 1)
+      return 0;
+
+   uint8_t buffer[16];
+   uint8_t *bend = &buffer[16];
+   uint8_t *bptr = buffer;
+
+   uint8_t *version_byte = &buffer[6];
+   uint8_t *variant_byte = &buffer[8];
+
+   size_t bytes_read;
+
+   FILE *dr = fopen("/dev/urandom", "r");
+   if (dr)
+   {
+      bytes_read = fread(buffer, 1, 16, dr);
+      if (bytes_read == 16)
+      {
+         while (bptr < bend && tptr+1 < tend)
+         {
+            // Modify bytes for version and variant
+            if (bptr == version_byte)
+               *bptr = 64 | ( *bptr & 15 );  // Set first 4 bits to 1000
+            else if (bptr == variant_byte)
+               *bptr = 128 | (*bptr & 63 );  // Set first 2 bits to 10
+
+            hexify_digit(tptr, *(uint8_t*)bptr);
+
+            ++bptr;
+            tptr += 2;
+
+            // Add hyphens
+            switch(bptr - buffer)
+            {
+               case 4:
+               case 6:
+               case 8:
+               case 10:
+                  if (tptr < tend)
+                     *tptr++ = '-';
+                  break;
+               default:
+                  break;
+            }
+         }
+      }
+      else
+         return 0;
+
+      fclose(dr);
+   }
+   else
+      return 0;
+
+   guid_buffer[buffer_len-1] = '\0';
+   return 1;
+}
+
 
 /**
  * @brief Simple callback function for init_buff_control().

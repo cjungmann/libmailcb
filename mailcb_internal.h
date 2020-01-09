@@ -12,6 +12,9 @@
 #include "socktalk.h"
 #include "mailcb.h"
 
+/** Utility function for mcb_make_guid(). */
+void hexify_digit(char *target, uint8_t value);
+
 /** Functions that support establishing a connection. */
 void log_ssl_error(MParcel *parcel, const SSL *ssl, int ret);
 int get_connected_socket(const char *host_url, int port);
@@ -30,6 +33,7 @@ int send_headers_new(MParcel *parcel, RecipLink *recipients, const HeaderField *
 
 /** POP server access functions */
 
+void log_pop_closure_message(const PopClosure *pc, const char *msg);
 int judge_pop_response(MParcel *parcel, const char *buffer, int len);
 void parse_pop_stat(const char *buffer, int *count, int *inbox_size);
 

@@ -155,6 +155,8 @@ int mcb_recv_data(MParcel *mp, char *buffer, int len);
 int mcb_digits_in_base(int value, int base);
 int mcb_itoa_buff(int value, int base, char *buffer, int buffer_len);
 
+int mcb_make_guid(char *guid_buffer, int buffer_len);
+
 size_t mcb_talker_reader(void *stalker, char *buffer, int buffer_len);
 
 int mcb_is_opening_smtp(const MParcel *parcel);

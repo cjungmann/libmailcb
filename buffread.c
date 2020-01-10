@@ -11,7 +11,7 @@
 // Private, internal functions
 const char *find_bc_end_of_line(const char *cur_line, const char *limit);
 const char *find_bc_start_of_next_line(const char *line_ending_char, const char *limit);
-void read_into_bc_buffer(BuffControl *bc);
+void bc_read_into_buffer(BuffControl *bc);
 
 /**
  * @brief Simple implementation of BReader function pointer using a FILE*
@@ -63,7 +63,7 @@ const char *find_bc_start_of_next_line(const char *line_ending_char, const char 
  * - This function is only called when there is no line or an incomplete line
  *
  */
-void read_into_bc_buffer(BuffControl *bc)
+void bc_read_into_buffer(BuffControl *bc)
 {
    assert(!bc->reached_EOF);
 
@@ -71,15 +71,16 @@ void read_into_bc_buffer(BuffControl *bc)
    int bytes_to_read = bc->buff_len;
    char last_char_of_buffer = '\0';
 
+   // Remember last character in case it's \r and the next char is \n
    if (bc->end_of_data)
       last_char_of_buffer = *(bc->end_of_data - 1);
 
    // For incomplete line, shift the memory and calculate how
    // much room remains in the buffer for additional data
-   if (bc->cur_line)
+   if (bc->next_line)
    {
-      int offset = bc->end_of_data - bc->cur_line;
-      memmove(bc->buffer, bc->cur_line, offset);
+      int offset = bc->end_of_data - bc->next_line;
+      memmove(bc->buffer, bc->next_line, offset);
       bytes_to_read -= offset;
 
       read_target = &bc->buffer[offset];
@@ -96,10 +97,10 @@ void read_into_bc_buffer(BuffControl *bc)
 
    // Set BuffControl to new situation:
    bc->end_of_data = &read_target[bytes_read];
-   bc->cur_line = bc->buffer;
+   bc->next_line = bc->buffer;
 
-   if (last_char_of_buffer == '\r' && *bc->cur_line == '\n')
-      ++bc->cur_line;
+   if (last_char_of_buffer == '\r' && *bc->next_line == '\n')
+      ++bc->next_line;
 }
 
 /**
@@ -126,7 +127,58 @@ void init_buff_control(BuffControl *bc,
    bc->data_source = data_source;
    bc->breader     = breader;
 
-   read_into_bc_buffer(bc);
+   bc_read_into_buffer(bc);
+}
+
+/**
+ * @brief Given a valid BuffControl::next_line pointer, find its end and reset cur_line and next_line
+ */
+int bc_find_next_line(BuffControl *bc)
+{
+   const char *end_of_line, *start_of_next_line;
+
+   // Check for signal that no more lines are available
+   if (bc->next_line == NULL)
+      return 0;
+
+   // See if the end of line is contained in the buffer:
+   end_of_line = find_bc_end_of_line(bc->next_line, bc->end_of_data);
+
+   // Exception: if we're at the EOF without a newline
+   if (!end_of_line && bc->reached_EOF)
+      end_of_line = bc->end_of_data;
+
+   if (end_of_line)
+   {
+      start_of_next_line = find_bc_start_of_next_line(end_of_line, bc->end_of_data);
+
+      if (start_of_next_line || bc->reached_EOF)
+      {
+         bc->cur_line = bc->next_line;
+         bc->cur_line_end = end_of_line;
+         bc->next_line = start_of_next_line;
+         return 1;
+      }
+   }
+
+   // we need to get more data before we can return anything.
+   bc_read_into_buffer(bc);
+   return bc_find_next_line(bc);
+}
+
+/**
+ * @brief Returns string pointer and length for most recently-retrieved line.
+ */
+int bc_get_current_line(BuffControl *bc, const char **line, int *line_len)
+{
+   if (bc->cur_line)
+   {
+      *line = bc->cur_line;
+      *line_len = bc->cur_line_end - bc->cur_line;
+      return 1;
+   }
+   else
+      return 0;
 }
 
 /**
@@ -149,51 +201,16 @@ void init_buff_control(BuffControl *bc,
  *                 terminated by an EOF.  That means that an empty final line
  *                 will be ignored.
  */
-int get_bc_line(BuffControl *bc, const char **line, int *line_len)
+int bc_get_next_line(BuffControl *bc, const char **line, int *line_len)
 {
-   const char *end_of_line, *start_of_next_line;
-
-   // Check for signal that no more lines are available
-   if (bc->cur_line == NULL)
+   if (bc_find_next_line(bc))
    {
-      *line = NULL;
-      *line_len = 0;
+      *line = bc->cur_line;
+      *line_len = bc->cur_line_end - bc->cur_line;
+      return 1;
+   }
+   else
       return 0;
-   }
-
-   // See if the end of line is available
-   end_of_line = find_bc_end_of_line(bc->cur_line, bc->end_of_data);
-   if (!end_of_line && bc->reached_EOF)
-      end_of_line = bc->end_of_data;
-
-   if (end_of_line)
-   {
-      // Before setting the 'return' parameters, make
-      // sure that the start of the next line is in the
-      // current buffer contents:
-      start_of_next_line = find_bc_start_of_next_line(end_of_line, bc->end_of_data);
-      if (start_of_next_line || bc->reached_EOF)
-      {
-         *line = bc->cur_line;
-         *line_len = end_of_line - bc->cur_line;
-
-         // If reached the end of the message:
-         if (*line_len==1 && **line=='.')
-            bc->reached_EOF = 1;
-
-         if (bc->reached_EOF)
-            bc->cur_line = NULL;
-         else
-            bc->cur_line = start_of_next_line;
-
-         return 1;
-      }
-   }
-      
-   // If we've fallen through the preceding conditions,
-   // we need to get more data before we can return anything.
-   read_into_bc_buffer(bc);
-   return get_bc_line(bc, line, line_len);
 }
 
 #ifdef BUFFREAD_MAIN
@@ -206,8 +223,12 @@ void read_the_file(BuffControl *bc)
    int line_len;
    int counter = 0;
       
-   while(get_bc_line(bc, &line, &line_len))
+   while(bc_get_next_line(bc, &line, &line_len))
+   {
       printf("line [43;1m%3d[m with %2d characters:  %.*s\n", ++counter, line_len, line_len, line);
+      if (bc_get_current_line(bc, &line, &line_len))
+         printf("     reread: [32;1m%.*s[m\n", line_len, line);
+   }
 }
 
 int main(int argc, const char **argv)
@@ -227,7 +248,7 @@ int main(int argc, const char **argv)
          init_buff_control(&bc, buffer, sizeof(buffer), bc_file_reader, (void*)fstream);
 
          // Set for debugging, show timing and size of reads to stderr:
-         /* bc.log_reads = 1; */
+         bc.log_reads = 1;
 
          read_the_file(&bc);
 

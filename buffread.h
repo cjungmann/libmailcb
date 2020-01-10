@@ -1,5 +1,5 @@
-#ifndef BUFFREAD_C
-#define BUFFREAD_C
+#ifndef BUFFREAD_H
+#define BUFFREAD_H
 
 typedef size_t (*BReader)(void *source, char *buffer, int chars_to_read);
 
@@ -17,6 +17,8 @@ typedef struct _buff_control
 
    // Always pointing to a line
    const char *cur_line;
+   const char *cur_line_end;
+   const char *next_line;
 
    // flag to indicate EOF reached
    int reached_EOF;
@@ -26,7 +28,8 @@ typedef struct _buff_control
 
 } BuffControl;
 
-int get_bc_line(BuffControl *bc, const char **line, int *line_len);
+int bc_get_next_line(BuffControl *bc, const char **line, int *line_len);
+int bc_get_current_line(BuffControl *bc, const char **line, int *line_len);
 
 void init_buff_control(BuffControl *bc,
                        char *buffer,

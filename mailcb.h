@@ -132,6 +132,7 @@ typedef struct _comm_parcel
    const char *from;   // from field in SMTP envelope
    SmtpCaps caps;      // SMTP capabilities as reported by EHLO response
    ReportEnvelopeRecipients report_recipients;
+   char multipart_boundary[37];
 
    /** POP operations variables */
    int pop_reader;
@@ -170,7 +171,13 @@ void mcb_parse_header_line(const char *buffer,
 
 int mcb_greet_smtp_server(MParcel *parcel);
 int mcb_authorize_smtp_session(MParcel *parcel);
+
+void mcb_send_mime_announcement(MParcel *parcel);
+void mcb_send_mime_border(MParcel *parcel, const char *content_type, const char *charset);
+void mcb_send_mime_end(MParcel *parcel);
+
 void mcb_quit_smtp_server(MParcel *parcel);
+
 
 void mcb_greet_pop_server(MParcel *parcel);
 

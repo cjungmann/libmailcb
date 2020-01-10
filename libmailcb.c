@@ -1093,6 +1093,35 @@ void mcb_parse_header_line(const char *buffer,
    }
 }
 
+void mcb_send_mime_announcement(MParcel *parcel)
+{
+   if (mcb_make_guid(parcel->multipart_boundary, sizeof(parcel->multipart_boundary)))
+   {
+      mcb_send_data(parcel, "MIME-Version: 1.0", NULL);
+      mcb_send_data(parcel, "Content-Type: multipart/alternative;", NULL);
+      mcb_send_data(parcel, "boundary=\"", parcel->multipart_boundary, "\"", NULL);
+      mcb_send_data_endline(parcel);
+   }
+}
+
+void mcb_send_mime_border(MParcel *parcel, const char *content_type, const char *charset)
+{
+   mcb_send_data(parcel, "--", parcel->multipart_boundary, NULL);
+   mcb_send_data(parcel,
+                 "Content-Type: ",
+                 content_type,
+                 "; charset=",
+                 (charset?charset:"iso-8859-1"),
+                 NULL);
+   mcb_send_data(parcel, "Content-Transfer-Encoding: quoted-printable", NULL);
+}
+
+void mcb_send_mime_end(MParcel *parcel)
+{
+   mcb_send_data(parcel, "--", parcel->multipart_boundary, "--", NULL);
+}
+
+
 /**
  * @brief Initialize SMTP server conversation, submitting credentials if appropriate.
  *

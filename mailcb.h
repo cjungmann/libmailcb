@@ -172,8 +172,13 @@ void mcb_parse_header_line(const char *buffer,
 int mcb_greet_smtp_server(MParcel *parcel);
 int mcb_authorize_smtp_session(MParcel *parcel);
 
+void mcb_clear_multipart_flag(MParcel *parcel);
+void mcb_set_multipart_flag(MParcel *parcel);
+int mcb_get_multipart_flag(const MParcel *parcel);
+
 void mcb_send_mime_announcement(MParcel *parcel);
 void mcb_send_mime_border(MParcel *parcel, const char *content_type, const char *charset);
+
 void mcb_send_mime_end(MParcel *parcel);
 
 void mcb_quit_smtp_server(MParcel *parcel);
@@ -183,14 +188,32 @@ void mcb_greet_pop_server(MParcel *parcel);
 
 void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user);
 
+typedef enum _line_judge_outcomes
+{
+   LJ_Print,
+   LJ_Content,
+   LJ_End
+} LJOutcomes;
 
-typedef int (*IsEndEmailMessage)(const char *line, int line_len);
+typedef LJOutcomes (*EmailLineJudge)(const char *line, int line_len);
+typedef void (*EmailSectionPrinter)(MParcel *parcel, const char *line, int line_len);
 
+/**
+ * @brief Pointer to function that judges and optionally acts on specific lines.
+ *
+ * @param parcel    Resource for writing to the server
+ * @param line      Address to start of line to judge
+ * @param line_len  Number of characters to the end of the line
+ *
+ * @return 0 (false) to indicate the message will continue,
+ *         1 (true) to indicate that the line signals the end of the message.
+ */
 void mcb_send_email_new(MParcel *parcel,
                         RecipLink  *recipients,
                         const HeaderField *headers,
                         BuffControl *bc,
-                        IsEndEmailMessage is_end_of_email);
+                        EmailLineJudge line_judger,
+                        EmailSectionPrinter section_printer);
 
 
 

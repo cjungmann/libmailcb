@@ -33,6 +33,8 @@ void email_from_file_final_send(MParcel *parcel, BuffControl *bc,
 void report_recipients(MParcel *parcel, RecipLink *rchain);
 int end_of_email_message(const char *line, int line_len);
 
+LJOutcomes line_judger(const char *line, int line_len);
+void section_printer(MParcel *parcel, const char *line, int line_len);
 
 /**
  * @brief The beginning of the three-step process of reading and sending emails.
@@ -67,7 +69,7 @@ void collect_email_recipients(MParcel *parcel, BuffControl *bc)
    int recipient_count = 0;
    int found_end_of_message = 0;
 
-   while (get_bc_line(bc, &line, &line_len))
+   while (bc_get_next_line(bc, &line, &line_len))
    {
       if (line_len == 1 && (*line == SECTION_DELIM  || *line == MESSAGE_DELIM))
       {
@@ -149,7 +151,7 @@ void collect_email_recipients(MParcel *parcel, BuffControl *bc)
       // Flush the rest of the message, if any:
       if (!found_end_of_message)
       {
-         while (get_bc_line(bc, &line, &line_len))
+         while (bc_get_next_line(bc, &line, &line_len))
             if (line_len==1 && *line==MESSAGE_DELIM)
                break;
       }
@@ -172,10 +174,20 @@ void collect_email_headers(MParcel *parcel, BuffControl *bc, RecipLink *recips)
    HeaderField *h_root = NULL, *h_tail = NULL, *h_cur;
    FieldValue *v_tail = NULL, *v_cur;
 
-   while (get_bc_line(bc, &line, &line_len))
+   while (bc_get_next_line(bc, &line, &line_len))
    {
-      if (line_len == 1 && (*line == MESSAGE_DELIM || *line == SECTION_DELIM))
-         break;
+      if (line_len > 0)
+      {
+         if (*line == MESSAGE_DELIM)
+            break;
+         else if (*line == SECTION_DELIM)
+         {
+            if (line_len > 2 && *(line+1) == '#')
+               mcb_set_multipart_flag(parcel);
+
+            break;
+         }
+      }
 
       // Split line into name/value parts
       mcb_parse_header_line(line, &line[line_len], &name, &name_len, &value, &value_len);
@@ -245,12 +257,12 @@ void email_from_file_final_send(MParcel *parcel,
       int line_len;
 
       // flush to end-of-message
-      while (get_bc_line(bc, &line, &line_len))
-         if ((*end_of_email_message)(line, line_len))
+      while (bc_get_next_line(bc, &line, &line_len))
+         if (LJ_End == (*line_judger)(line, line_len))
             break;
    }
    else
-      mcb_send_email_new(parcel, recips, headers, bc, end_of_email_message);
+      mcb_send_email_new(parcel, recips, headers, bc, line_judger, section_printer);
 }
 
 /***********************************/
@@ -289,10 +301,43 @@ void report_recipients(MParcel *parcel, RecipLink *rchain)
    }
 }
 
+LJOutcomes line_judger(const char *line, int line_len)
+{
+   if (line_len > 0)
+   {
+      if (*line == MESSAGE_DELIM)
+         return LJ_End;
+      else if (*line == SECTION_DELIM && (line_len == 1 || (line_len > 2 && *(line+1) =='#')))
+         return LJ_Content;
+   }
+
+   return LJ_Print;
+}
+
+void section_printer(MParcel *parcel, const char *line, int line_len)
+{
+   const char *ptr = line;
+   const char *end = line+line_len;
+   while (ptr < end && *ptr != '#')
+      ++ptr;
+
+   if (*ptr=='#')
+   {
+      ++ptr;
+      line_len -= (ptr - line);
+      char *content_type = (char*)alloca(line_len);
+      --line_len;
+      memcpy(content_type, ptr, line_len);
+      content_type[line_len] = '\0';
+      
+      mcb_send_mime_border(parcel, content_type, NULL);
+   }
+}
+
 /**
  * @brief Callback function that **mailcb** uses to detect the end of a message
  */
-int end_of_email_message(const char *line, int line_len)
+int end_judger(const char *line, int line_len)
 {
    return (line_len == 1 && *line == MESSAGE_DELIM);
 }

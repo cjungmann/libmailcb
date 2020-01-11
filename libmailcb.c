@@ -396,7 +396,7 @@ int send_envelope_new(MParcel *parcel, RecipLink *recipients)
          mcb_send_data(parcel, "DATA", NULL);
          bytes_read = mcb_recv_data(parcel, buffer, sizeof(buffer));
          reply_status = atoi(buffer);
-         if (reply_status >= 300 && reply_status < 400)
+         if (reply_status >= 200 && reply_status < 400)
             return 1;
          else
          {
@@ -424,7 +424,9 @@ int send_envelope_new(MParcel *parcel, RecipLink *recipients)
 /**
  * @brief Internal function for mcb_send_email_new() to send email headers.
  */
-int send_headers_new(MParcel *parcel, RecipLink *recipients, const HeaderField *headers)
+int send_headers_new(MParcel *parcel,
+                     RecipLink *recipients,
+                     const HeaderField *headers)
 {
    if (!recipients)
       return 0;
@@ -526,6 +528,9 @@ int send_headers_new(MParcel *parcel, RecipLink *recipients, const HeaderField *
       hptr = hptr->next;
    }
 
+   if (mcb_get_multipart_flag(parcel))
+      mcb_send_mime_announcement(parcel);
+   
    // Send blank line to terminate headers
    mcb_send_data(parcel, "", NULL);
 
@@ -630,7 +635,7 @@ int send_pop_message_header(PopClosure *popc)
   // We haven't yet read the response to the TOP message.
    int message_confirmed = 0;
 
-   while(get_bc_line(&bc, &line, &line_len))
+   while(bc_get_next_line(&bc, &line, &line_len))
    {
       // We're only collecting header fields, so at the
       // first signal the header ends (an empty line or
@@ -711,7 +716,7 @@ int send_pop_message_header(PopClosure *popc)
    } // end of while(get_bc_line())
 
    // purge response
-   while(get_bc_line(&bc, &line, &line_len))
+   while(bc_get_next_line(&bc, &line, &line_len))
       ;
 
    // execute the callback
@@ -723,7 +728,7 @@ int send_pop_message_header(PopClosure *popc)
 
   purge_response_return_error:
    // read until end-of-transmission
-   while(get_bc_line(&bc, &line, &line_len))
+   while(bc_get_next_line(&bc, &line, &line_len))
       ;
 
    return 0;
@@ -999,7 +1004,7 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user)
                {
                   // For GMail, at least, the capabilities have changed,
                   // so we'll reaquire them now.
-                  initialize_smtp_session(parcel);
+                  /* initialize_smtp_session(parcel); */
 
                   open_ssl(parcel, osocket, talker_user);
                }
@@ -1093,17 +1098,47 @@ void mcb_parse_header_line(const char *buffer,
    }
 }
 
-void mcb_send_mime_announcement(MParcel *parcel)
+void mcb_clear_multipart_flag(MParcel *parcel)
 {
-   if (mcb_make_guid(parcel->multipart_boundary, sizeof(parcel->multipart_boundary)))
-   {
-      mcb_send_data(parcel, "MIME-Version: 1.0", NULL);
-      mcb_send_data(parcel, "Content-Type: multipart/alternative;", NULL);
-      mcb_send_data(parcel, "boundary=\"", parcel->multipart_boundary, "\"", NULL);
-      mcb_send_data_endline(parcel);
-   }
+   memset(parcel->multipart_boundary, 0, sizeof(parcel->multipart_boundary));
 }
 
+void mcb_set_multipart_flag(MParcel *parcel)
+{
+   if (!mcb_make_guid(parcel->multipart_boundary, sizeof(parcel->multipart_boundary)))
+      mcb_clear_multipart_flag(parcel);
+}
+
+int mcb_get_multipart_flag(const MParcel *parcel)
+{
+   return *parcel->multipart_boundary != 0;
+}
+
+/**
+ * @brief Send multipart/alternative email headers
+ *
+ * Generate a new GUID to use for the border strings, then
+ * adds the Mime headers.
+ *
+ * Probably should be private to prevent multiple calls.
+ */
+void mcb_send_mime_announcement(MParcel *parcel)
+{
+   mcb_send_data(parcel, "MIME-Version: 1.0", NULL);
+   mcb_send_data(parcel,
+                 "Content-Type: multipart/alternative; boundary=",
+                 parcel->multipart_boundary,
+                 NULL);
+   /* mcb_send_data(parcel, "Content-Type: multipart/alternative;", NULL); */
+   /* mcb_send_data(parcel, "\tboundary=\"", parcel->multipart_boundary, "\"", NULL); */
+   mcb_send_data_endline(parcel);
+}
+
+/**
+ * @brief Used by the calling process to initialiate a new mime section.
+ *
+ * The section will use the border value generated earlier, when the multipart started.
+ */
 void mcb_send_mime_border(MParcel *parcel, const char *content_type, const char *charset)
 {
    mcb_send_data(parcel, "--", parcel->multipart_boundary, NULL);
@@ -1114,6 +1149,7 @@ void mcb_send_mime_border(MParcel *parcel, const char *content_type, const char 
                  (charset?charset:"iso-8859-1"),
                  NULL);
    mcb_send_data(parcel, "Content-Transfer-Encoding: quoted-printable", NULL);
+   mcb_send_data_endline(parcel);
 }
 
 void mcb_send_mime_end(MParcel *parcel)
@@ -1291,7 +1327,8 @@ void mcb_send_email_new(MParcel *parcel,
                         RecipLink *recipients,
                         const HeaderField *headers,
                         BuffControl *bc,
-                        IsEndEmailMessage is_end_of_email)
+                        EmailLineJudge line_judger,
+                        EmailSectionPrinter section_printer)
 {
    const char *line;
    int        line_len;
@@ -1300,18 +1337,36 @@ void mcb_send_email_new(MParcel *parcel,
    {
       if (send_headers_new(parcel, recipients, headers))
       {
-         // Loop to read and send lines until end of message:
-         while (get_bc_line(bc, &line, &line_len))
+         if (bc_get_current_line(bc, &line, &line_len))
          {
-            if ((*is_end_of_email)(line, line_len))
-               break;
-            else
-               mcb_send_line(parcel, line, line_len);
+            if (LJ_Content == (*line_judger)(line, line_len))
+               (*section_printer)(parcel, line, line_len);
+
+            // Loop to read and send lines until end of message:
+            while (bc_get_next_line(bc, &line, &line_len))
+            {
+               switch((*line_judger)(line, line_len))
+               {
+                  case LJ_Print:
+                     mcb_send_line(parcel, line, line_len);
+                     break;
+                  case LJ_Content:
+                     (*section_printer)(parcel, line, line_len);
+                     break;
+                  case LJ_End:
+                     goto end_message;
+               }
+            }
          }
+
+        end_message:
+
+         if (mcb_get_multipart_flag(parcel))
+            mcb_send_mime_end(parcel);
 
          mcb_send_data(parcel, ".", NULL);
 
-         goto bypass_flush_for_failure;
+         goto bypass_failure_flush;
       }
       else
          mcb_log_message(parcel, "Headers not accepted.", NULL);
@@ -1319,12 +1374,13 @@ void mcb_send_email_new(MParcel *parcel,
    else
       mcb_log_message(parcel, "Envelope not accepted.", NULL);
 
+   // failure_flush:
    // flush message after envelope or header failure:
-   while (get_bc_line(bc, &line, &line_len))
-      if ((*is_end_of_email)(line, line_len))
+   while (bc_get_next_line(bc, &line, &line_len))
+      if (LJ_End == (*line_judger)(line, line_len))
          break;
 
-  bypass_flush_for_failure:
+  bypass_failure_flush:
    // Send recipients results even if envelope fails
    // in case a RCPT_TO failure caused the envelope failure.
    if (parcel->report_recipients)

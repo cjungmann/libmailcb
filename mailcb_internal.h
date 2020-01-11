@@ -29,7 +29,9 @@ void parse_smtp_greeting_response(MParcel *parcel, const char *buffer, int buffe
 int rcpt_status_ok(const RecipLink *rlink);
 
 int send_envelope_new(MParcel *parcel, RecipLink *recipients);
-int send_headers_new(MParcel *parcel, RecipLink *recipients, const HeaderField *headers);
+int send_headers_new(MParcel *parcel,
+                     RecipLink *recipients,
+                     const HeaderField *headers);
 
 /** POP server access functions */
 

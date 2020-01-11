@@ -318,13 +318,15 @@ void section_printer(MParcel *parcel, const char *line, int line_len)
 {
    const char *ptr = line;
    const char *end = line+line_len;
+
+   // '#' introduces a mime-type for the section
    while (ptr < end && *ptr != '#')
       ++ptr;
 
    if (*ptr=='#')
    {
-      ++ptr;
       line_len -= (ptr - line);
+      ++ptr;
       char *content_type = (char*)alloca(line_len);
       --line_len;
       memcpy(content_type, ptr, line_len);

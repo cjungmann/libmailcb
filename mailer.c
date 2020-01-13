@@ -192,6 +192,7 @@ void collect_email_headers(MParcel *parcel, BuffControl *bc, RecipLink *recips)
       // Split line into name/value parts
       mcb_parse_header_line(line, &line[line_len], &name, &name_len, &value, &value_len);
 
+      // For any name, create a new HeaderField link:
       if (name_len)
       {
          // Make empty link
@@ -207,14 +208,17 @@ void collect_email_headers(MParcel *parcel, BuffControl *bc, RecipLink *recips)
          else
             h_root = h_tail = h_cur;
 
+         // Copy name value to new stack memory array:
          tline = (char*)alloca(name_len+1);
          memcpy(tline, line, name_len);
          tline[name_len] = '\0';
-         h_cur->name = tline;
 
+         h_cur->name = tline;
          v_cur = NULL;
       }
 
+      // Note that header field values may span multiple lines.
+      // This code should accommodate that possibility.
       if (value_len && h_cur)
       {
          if (v_tail)
@@ -226,9 +230,11 @@ void collect_email_headers(MParcel *parcel, BuffControl *bc, RecipLink *recips)
          else
             v_cur = &h_cur->value;
 
+         // Copy value line to new stack memory
          tline = (char*)alloca(value_len+1);
-         memcpy(tline, line, value_len);
-         tline[name_len] = '\0';
+         memcpy(tline, value, value_len);
+         tline[value_len] = '\0';
+
          v_cur->value = tline;
       }
    }

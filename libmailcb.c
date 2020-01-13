@@ -617,6 +617,8 @@ int send_pop_message_header(PopClosure *popc)
                      mcb_talker_reader,
                      (void*)popc->parcel->stalker);
 
+   PopMessageUser pmu = popc->parcel->pop_message_receiver;
+
    // Variables whose pointers are passed to get_bc_line()
    const char *line;
    int line_len;
@@ -637,11 +639,10 @@ int send_pop_message_header(PopClosure *popc)
 
    while(bc_get_next_line(&bc, &line, &line_len))
    {
-      // We're only collecting header fields, so at the
-      // first signal the header ends (an empty line or
-      // a single period), break out of the while-loop.
-      if (line_len == 0 || (line_len == 1 && *line == '.'))
-         break;
+      // We're only collecting header fields, so break
+      // out if it's a single character,  '.', line.
+      if (line_len == 1 && *line == '.')
+         goto execute_pop_callback;
 
       // Process first line after TOP message sent:
       if (!message_confirmed)
@@ -715,12 +716,11 @@ int send_pop_message_header(PopClosure *popc)
       } // if message_confirmed
    } // end of while(get_bc_line())
 
-   // purge response
+   // purge response if we fell out
    while(bc_get_next_line(&bc, &line, &line_len))
       ;
 
-   // execute the callback
-   PopMessageUser pmu = popc->parcel->pop_message_receiver;
+  execute_pop_callback:
    if (pmu)
       return (*pmu)(popc, froot, &bc);
    else
@@ -1036,6 +1036,10 @@ void mcb_parse_header_line(const char *buffer,
 {
    *name = *value = NULL;
    *name_len = *value_len = 0;
+
+   // Abort if it's a zero-length line:
+   if (end <= buffer)
+      return;
 
    // Progress flags
    int done_with_name = 0;

@@ -34,6 +34,11 @@ make
 sudo make install
 ~~~
 
+## External References
+
+I am learning a lot about SMTP and POP3 mail protocols.  Many of
+the references I have used are [recorded here](README_Resources.md)
+
 ## Sub Project *mailer*
 
 This small program uses the *libmailcb* library to send emails

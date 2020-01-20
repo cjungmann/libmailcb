@@ -1,7 +1,7 @@
 #ifndef MAILCB_INTERNAL_H
 #define MAILCB_INTERNAL_H
 
-#include <sys/types.h>
+#include <stdint.h>       // for uint8_t in hexify_digit()
 
 #include <sys/socket.h>
 #include <openssl/ssl.h>

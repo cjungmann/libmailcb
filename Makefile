@@ -10,7 +10,7 @@ CC = cc
 
 all : libmailcb.so mailer
 
-libmailcb.so : libmailcb.c mailcb.h mailcb_internal.h socktalk.o socktalk.h buffread.o buffread.h commparcel.c
+libmailcb.so : libmailcb.c mailcb.h mailcb_internal.h socktalk.h buffread.h commparcel.c $(MODULES)
 	$(CC) $(LIB_CFLAGS) -o libmailcb.so $(MODULES) libmailcb.c -lssl -lcrypto -lcode64
 
 socktalk.o : socktalk.c socktalk.h
@@ -19,7 +19,7 @@ socktalk.o : socktalk.c socktalk.h
 buffread.o : buffread.c buffread.h
 	$(CC) $(LIB_CFLAGS) -c -o buffread.o buffread.c
 
-simple_email.o : mailcb.h mailcb_internal.h socktalk.h buffread.h simple_email.c
+simple_email.o : simple_email.c mailcb.h mailcb_internal.h socktalk.h buffread.h
 	$(CC) $(LIB_CFLAGS) -c -o simple_email.o simple_email.c
 
 clean :

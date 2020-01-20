@@ -190,9 +190,9 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user);
 
 typedef enum _line_judge_outcomes
 {
-   LJ_Print,
-   LJ_Content,
-   LJ_End
+   LJ_Continue = 0,
+   LJ_Section,
+   LJ_End_Message
 } LJOutcomes;
 
 typedef LJOutcomes (*EmailLineJudge)(const char *line, int line_len);
@@ -214,6 +214,14 @@ void mcb_send_email_new(MParcel *parcel,
                         BuffControl *bc,
                         EmailLineJudge line_judger,
                         EmailSectionPrinter section_printer);
+
+void mcb_send_email_simple(MParcel *parcel,
+                           BuffControl *bc,
+                           EmailLineJudge line_judger,
+                           EmailSectionPrinter section_printer);
+
+LJOutcomes mcb_basic_line_judger(const char *line, int line_len);
+void mcb_basic_section_printer(MParcel *parcel, const char *line, int line_len);
 
 
 

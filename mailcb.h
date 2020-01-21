@@ -132,6 +132,7 @@ typedef struct _comm_parcel
    const char *from;   // from field in SMTP envelope
    SmtpCaps caps;      // SMTP capabilities as reported by EHLO response
    ReportEnvelopeRecipients report_recipients;
+   int OnlySendEnvelope;
    char multipart_boundary[37];
 
    /** POP operations variables */
@@ -191,7 +192,7 @@ void mcb_prepare_talker(MParcel *parcel, ServerReady talker_user);
 typedef enum _line_judge_outcomes
 {
    LJ_Continue = 0,
-   LJ_Section,
+   LJ_End_Section,
    LJ_End_Message
 } LJOutcomes;
 

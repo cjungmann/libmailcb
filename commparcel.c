@@ -1,5 +1,6 @@
 #include "mailcb.h"
 #include <ctype.h>   // for isspace()
+#include <string.h>  // for memset, memcpy, etc
 
 #include "commparcel.h"
 

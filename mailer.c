@@ -16,7 +16,6 @@ typedef struct _mailer_data
 {
    int  read_file;
    FILE *file_to_read;
-   int fake_emailing;
 } MailerData;
 
 
@@ -48,11 +47,18 @@ void emails_from_file(MParcel *parcel)
    FILE *efile = ((MailerData*)parcel->data)->file_to_read;
    char buffer[1024];
 
+   int use_new_mailer = 1;
+
    BuffControl bc;
    init_buff_control(&bc, buffer, sizeof(buffer), bc_file_reader, (void*)efile);
 
    while (!bc.reached_EOF)
-      collect_email_recipients(parcel, &bc);
+   {
+      if (use_new_mailer)
+         mcb_send_email_simple(parcel, &bc, line_judger, section_printer);
+      else
+         collect_email_recipients(parcel, &bc);
+   }
 }
 
 /**
@@ -136,7 +142,10 @@ void collect_email_recipients(MParcel *parcel, BuffControl *bc)
          if (*line == SECTION_DELIM)
             collect_email_headers(parcel, bc, rl_root);
          else if (*line == MESSAGE_DELIM)
-            email_from_file_final_send(parcel, bc, rl_root, NULL);
+         {
+            mcb_send_email_new(parcel, rl_root, NULL, bc, line_judger, section_printer);
+            /* email_from_file_final_send(parcel, bc, rl_root, NULL); */
+         }
    }
    else  // Message will not be sent
    {
@@ -239,7 +248,7 @@ void collect_email_headers(MParcel *parcel, BuffControl *bc, RecipLink *recips)
       }
    }
 
-   email_from_file_final_send(parcel, bc, recips, h_root);
+   mcb_send_email_new(parcel, recips, h_root, bc, line_judger, section_printer);
 }
 
 /**
@@ -248,28 +257,28 @@ void collect_email_headers(MParcel *parcel, BuffControl *bc, RecipLink *recips)
  * Separated out of collect_emailheaders() to provide a shortcut
  * that bypasses collect_email_headers().
  */
-void email_from_file_final_send(MParcel *parcel,
-                                BuffControl *bc,
-                                RecipLink *recips,
-                                const HeaderField *headers)
-{
-   const MailerData *md = (MailerData*)parcel->data;
+/* void email_from_file_final_send(MParcel *parcel, */
+/*                                 BuffControl *bc, */
+/*                                 RecipLink *recips, */
+/*                                 const HeaderField *headers) */
+/* { */
+/*    const MailerData *md = (MailerData*)parcel->data; */
 
-   if (md->fake_emailing)
-   {
-      printf("[36;1mPhantom sending of an email.[m\n");
+/*    if (md->fake_emailing) */
+/*    { */
+/*       printf("[36;1mPhantom sending of an email.[m\n"); */
 
-      const char *line;
-      int line_len;
+/*       const char *line; */
+/*       int line_len; */
 
-      // flush to end-of-message
-      while (bc_get_next_line(bc, &line, &line_len))
-         if (LJ_End == (*line_judger)(line, line_len))
-            break;
-   }
-   else
-      mcb_send_email_new(parcel, recips, headers, bc, line_judger, section_printer);
-}
+/*       // flush to end-of-message */
+/*       while (bc_get_next_line(bc, &line, &line_len)) */
+/*          if (LJ_End_Message == (*line_judger)(line, line_len)) */
+/*             break; */
+/*    } */
+/*    else */
+/*       mcb_send_email_new(parcel, recips, headers, bc, line_judger, section_printer); */
+/* } */
 
 /***********************************/
 /* Library SMTP Callback functions */
@@ -312,12 +321,12 @@ LJOutcomes line_judger(const char *line, int line_len)
    if (line_len > 0)
    {
       if (*line == MESSAGE_DELIM)
-         return LJ_End;
+         return LJ_End_Message;
       else if (*line == SECTION_DELIM && (line_len == 1 || (line_len > 2 && *(line+1) =='#')))
-         return LJ_Content;
+         return LJ_End_Section;
    }
 
-   return LJ_Print;
+   return LJ_Continue;
 }
 
 void section_printer(MParcel *parcel, const char *line, int line_len)
@@ -693,8 +702,8 @@ int main(int argc, const char** argv)
                case 'q':  // quiet, suppress error messages
                   mparcel.quiet = 1;
                   break;
-               case 's':
-                  md.fake_emailing = 1;
+               case 's':  // suppress emails 
+                  mparcel.OnlySendEnvelope = 1;
                   break;
                case 't':   // tls
                   mparcel.starttls = 1;
@@ -770,7 +779,6 @@ int main(int argc, const char** argv)
   abort_program:
    return 0;
 }
-
 
 
 

@@ -8,11 +8,12 @@
 #include <assert.h>
 #include <unistd.h>      // for close();
 #include <stdarg.h>      // for va_args in advise() and log()
+#include <ctype.h>       // for isspace()
 
 #include "socktalk.h"
 #include "mailcb.h"
+#include "commparcel.h"
 
-#include "commparcel.c"
 #include "mailcb_internal.h"
 
 CapString capstrings[] = {
@@ -1339,11 +1340,15 @@ void mcb_send_email_new(MParcel *parcel,
 
    if (send_envelope_new(parcel, recipients))
    {
-      if (send_headers_new(parcel, recipients, headers))
+      if (parcel->OnlySendEnvelope)
+      {
+         ;
+      }
+      else if (send_headers_new(parcel, recipients, headers))
       {
          if (bc_get_current_line(bc, &line, &line_len))
          {
-            if (LJ_Content == (*line_judger)(line, line_len))
+            if (LJ_End_Section == (*line_judger)(line, line_len))
                (*section_printer)(parcel, line, line_len);
 
             // Loop to read and send lines until end of message:
@@ -1351,13 +1356,13 @@ void mcb_send_email_new(MParcel *parcel,
             {
                switch((*line_judger)(line, line_len))
                {
-                  case LJ_Print:
+                  case LJ_Continue:
                      mcb_send_line(parcel, line, line_len);
                      break;
-                  case LJ_Content:
+                  case LJ_End_Section:
                      (*section_printer)(parcel, line, line_len);
                      break;
-                  case LJ_End:
+                  case LJ_End_Message:
                      goto end_message;
                }
             }
@@ -1378,10 +1383,10 @@ void mcb_send_email_new(MParcel *parcel,
    else
       mcb_log_message(parcel, "Envelope not accepted.", NULL);
 
-   // failure_flush:
+   // skip or failure_flush:
    // flush message after envelope or header failure:
    while (bc_get_next_line(bc, &line, &line_len))
-      if (LJ_End == (*line_judger)(line, line_len))
+      if (LJ_End_Message == (*line_judger)(line, line_len))
          break;
 
   bypass_failure_flush:

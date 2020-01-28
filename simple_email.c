@@ -217,14 +217,8 @@ void int_collect_headers(SSEClosure *ssec)
       // This code should accommodate that possibility.
       if (value_len && h_cur)
       {
-         if (v_tail)
-         {
-            v_cur = (FieldValue*)alloca(sizeof(FieldValue));
-            v_tail->next = v_cur;
-            v_tail = v_cur;
-         }
-         else
-            v_cur = &h_cur->value;
+         v_cur = (FieldValue*)alloca(sizeof(FieldValue));
+         memset(v_cur, 0, sizeof(FieldValue));
 
          // Copy value line to new stack memory
          tline = (char*)alloca(value_len+1);
@@ -232,6 +226,14 @@ void int_collect_headers(SSEClosure *ssec)
          tline[value_len] = '\0';
 
          v_cur->value = tline;
+
+         if (v_tail)
+         {
+            v_tail->next = v_cur;
+            v_tail = v_cur;
+         }
+         else
+            h_cur->value = v_tail = v_cur;
       }
    }
 

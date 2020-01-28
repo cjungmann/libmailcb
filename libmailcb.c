@@ -517,9 +517,9 @@ int send_headers_new(MParcel *parcel,
    const FieldValue *vptr;
    while (hptr)
    {
-      mcb_send_data(parcel, hptr->name, ": ", hptr->value.value, NULL);
+      mcb_send_data(parcel, hptr->name, ": ", hptr->value->value, NULL);
 
-      vptr = hptr->value.next;
+      vptr = hptr->value->next;
       while (vptr)
       {
          mcb_send_data(parcel, "\t", vptr->value, NULL);
@@ -699,20 +699,22 @@ int send_pop_message_header(PopClosure *popc)
 
          if (value_len)
          {
-            if (vtail)
-            {
-               vcur = (FieldValue*)alloca(sizeof(FieldValue));
-               vtail->next = vcur;
-               vtail = vcur;
-            }
-            else
-               vcur = &fcur->value;
-
             tvalue = (char*)alloca(value_len+1);
             memcpy(tvalue, value, value_len);
             tvalue[value_len] = '\0';
 
+            vcur = (FieldValue*)alloca(sizeof(FieldValue));
+            memset(vcur, 0, sizeof(FieldValue));
+
             vcur->value = tvalue;
+
+            if (vtail)
+            {
+               vtail->next = vcur;
+               vtail = vcur;
+            }
+            else
+               fcur->value = vtail = vcur;
          }
       } // if message_confirmed
    } // end of while(get_bc_line())

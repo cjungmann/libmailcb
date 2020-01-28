@@ -2,13 +2,14 @@ BASEFLAGS = -Wall -Werror
 LIB_CFLAGS = ${BASEFLAGS} -I. -fPIC -shared
 
 LOCAL_LINK = -Wl,-R -Wl,. -lmailcb
+LOCAL_LINKD = -Wl,-R -Wl,. -lmailcbd
 MODULES = buffread.o commparcel.o simple_email.o socktalk.o
 
 debug : BASEFLAGS  += -ggdb -DDEBUG
 
 CC = cc
 
-all : libmailcb.so mailer
+all : libmailcb.so mailer sample_smtp
 
 libmailcb.so : libmailcb.c mailcb.h mailcb_internal.h socktalk.h buffread.h commparcel.c $(MODULES)
 	$(CC) $(LIB_CFLAGS) -o libmailcb.so $(MODULES) libmailcb.c -lssl -lcrypto -lcode64
@@ -31,6 +32,9 @@ clean :
 mailer : mailer.c libmailcb.so mailcb.h
 	$(CC) $(BASEFLAGS) -L. -o mailer mailer.c $(LOCAL_LINK) -lreadini
 
+sample_smtp : sample_smtp.c libmailcb.so mailcb.h
+	$(CC) $(BASEFLAGS) -L. -o sample_smtp sample_smtp.c $(LOCAL_LINK) -lreadini
+
 debug: libmailcb.c mailcb.h mailcb_internal.h socktalk.c socktalk.h buffread.c buffread.h commparcel.c commparcel.h mailer.c
 	$(CC) $(LIB_CFLAGS) -c -o socktalkd.o socktalk.c
 	$(CC) $(LIB_CFLAGS) -c -o commparceld.o commparcel.c
@@ -38,6 +42,7 @@ debug: libmailcb.c mailcb.h mailcb_internal.h socktalk.c socktalk.h buffread.c b
 	$(CC) $(LIB_CFLAGS) -c -o simple_emaild.o simple_email.c
 	$(CC) $(LIB_CFLAGS) -o libmailcbd.so socktalkd.o buffreadd.o commparceld.o simple_emaild.o libmailcb.c -lssl -lcrypto -lcode64
 	$(CC) $(BASEFLAGS) -L. -o mailerd mailer.c $(LOCAL_LINK)d -lreadini
+	$(CC) $(BASEFLAGS) -L. -o sample_smtpd sample_smtp.c $(LOCAL_LINK) -lreadini
 
 install :
 	install -D --mode=755 libmailcb.so /usr/lib

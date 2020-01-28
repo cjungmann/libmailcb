@@ -18,9 +18,21 @@ typedef struct _field_value
 typedef struct _header_field
 {
    const char           *name;
-   FieldValue           value;
+   FieldValue           *value;
    struct _header_field *next;
 } HeaderField;
+
+struct _line_reader;
+
+typedef int (*lr_next_line)(struct _line_reader *lr, const char **line, int *line_len);
+typedef int (*lr_current_line)(struct _line_reader *lr, const char **line, int *line_len);
+
+typedef struct _line_reader
+{
+   void            *data;
+   lr_next_line    next_line;
+   lr_current_line current_line;
+} LineReader;
 
 
 /**

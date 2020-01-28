@@ -237,7 +237,7 @@ void collect_email_headers(MParcel *parcel, BuffControl *bc, RecipLink *recips)
             v_tail = v_cur;
          }
          else
-            v_cur = &h_cur->value;
+            v_cur = h_cur->value;
 
          // Copy value line to new stack memory
          tline = (char*)alloca(value_len+1);
@@ -430,14 +430,14 @@ int pop_message_receiver(PopClosure *popc, const HeaderField *fields, BuffContro
    {
       printf("%*s: ", max_name_len, fptr->name);
 
-      vptr = &fptr->value;
+      vptr = fptr->value;
 
       while (vptr)
       {
          if (vptr->value)
          {
             // Spaces to line if on a field value continuation
-            if (vptr != &fptr->value)
+            if (vptr != fptr->value)
                printf("%*s  ", max_name_len, "  ");
 
             // puts adds a newline, don't add another!

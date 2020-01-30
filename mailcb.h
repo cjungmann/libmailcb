@@ -182,19 +182,27 @@ void mcb_parse_header_line(const char *buffer,
                            const char **value,
                            int *value_len);
 
-int mcb_greet_smtp_server(MParcel *parcel);
-int mcb_authorize_smtp_session(MParcel *parcel);
+/**
+ * SMTP section. SMTP functions found in mailcb_smtp.c
+ */
 
-void mcb_clear_multipart_flag(MParcel *parcel);
-void mcb_set_multipart_flag(MParcel *parcel);
-int mcb_get_multipart_flag(const MParcel *parcel);
+int mcb_smtp_greet_server(MParcel *parcel);
+int mcb_smtp_authorize_session(MParcel *parcel);
 
-void mcb_send_mime_announcement(MParcel *parcel);
-void mcb_send_mime_border(MParcel *parcel, const char *content_type, const char *charset);
+void mcb_smtp_clear_multipart_flag(MParcel *parcel);
+void mcb_smtp_set_multipart_flag(MParcel *parcel);
+int mcb_smtp_get_multipart_flag(const MParcel *parcel);
 
-void mcb_send_mime_end(MParcel *parcel);
+void mcb_smtp_send_mime_announcement(MParcel *parcel);
+void mcb_smtp_send_mime_border(MParcel *parcel, const char *content_type, const char *charset);
 
-void mcb_quit_smtp_server(MParcel *parcel);
+void mcb_smtp_send_mime_end(MParcel *parcel);
+
+void mcb_smtp_quit_server(MParcel *parcel);
+
+/**
+ * POP Section
+ */
 
 
 void mcb_greet_pop_server(MParcel *parcel);

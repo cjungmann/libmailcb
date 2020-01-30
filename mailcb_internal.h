@@ -22,14 +22,14 @@ void open_ssl(MParcel *parcel, int socket_handle, ServerReady talker_user);
 
 
 /** SMTP server access functions */
-void initialize_smtp_session(MParcel *parcel);
-void parse_smtp_capability_response(MParcel *parcel, const char *line, int line_len);
-void parse_smtp_greeting_response(MParcel *parcel, const char *buffer, int buffer_len);
+void smtp_initialize_session(MParcel *parcel);
+void smtp_parse_capability_response(MParcel *parcel, const char *line, int line_len);
+void smtp_parse_greeting_response(MParcel *parcel, const char *buffer, int buffer_len);
 
 int rcpt_status_ok(const RecipLink *rlink);
 
-int send_envelope_new(MParcel *parcel, RecipLink *recipients);
-int send_headers_new(MParcel *parcel,
+int smtp_send_envelope(MParcel *parcel, RecipLink *recipients);
+int smtp_send_headers(MParcel *parcel,
                      RecipLink *recipients,
                      const HeaderField *headers);
 

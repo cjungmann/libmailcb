@@ -192,7 +192,7 @@ void collect_email_headers(MParcel *parcel, BuffControl *bc, RecipLink *recips)
          else if (*line == SECTION_DELIM)
          {
             if (line_len > 2 && *(line+1) == '#')
-               mcb_set_multipart_flag(parcel);
+               mcb_smtp_set_multipart_flag(parcel);
 
             break;
          }
@@ -347,7 +347,7 @@ void section_printer(MParcel *parcel, const char *line, int line_len)
       memcpy(content_type, ptr, line_len);
       content_type[line_len] = '\0';
       
-      mcb_send_mime_border(parcel, content_type, NULL);
+      mcb_smtp_send_mime_border(parcel, content_type, NULL);
    }
 }
 
@@ -364,7 +364,7 @@ int end_judger(const char *line, int line_len)
 
 void begin_smtp_conversation(MParcel *parcel)
 {
-   if (mcb_authorize_smtp_session(parcel))
+   if (mcb_smtp_authorize_session(parcel))
    {
       parcel->report_recipients = report_recipients;
 

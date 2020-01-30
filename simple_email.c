@@ -38,7 +38,7 @@ void mcb_basic_section_printer(MParcel *parcel, const char *line, int line_len)
       memcpy(content_type, ptr, line_len);
       content_type[line_len] = '\0';
       
-      mcb_send_mime_border(parcel, content_type, NULL);
+      mcb_smtp_send_mime_border(parcel, content_type, NULL);
    }
 }
 

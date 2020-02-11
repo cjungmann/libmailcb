@@ -19,6 +19,12 @@ help me figure this whole thing out.
   there may be additional status information following the status
   code.  This document defines the protocol.
 
+- [Mail Extension Parameters](https://www.iana.org/assignments/mail-parameters/mail-parameters.txt)
+  This document contains a generous list of SMTP extension
+  codes.  These extensions notify a user as to the features
+  supported by the SMTP server, including 7BITMIME, CHUNKING,
+  etc.
+
 - [Bounced Email Reckoning](https://www.vtiger.com/docs/email-bounces-and-error-codes)  
   Undelivered emails should initiate some investigation.  This
   page discusses many reasons an email might bounce, and includes
